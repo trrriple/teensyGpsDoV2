@@ -1,0 +1,29 @@
+BasedOnStyle: Google
+IndentWidth: 4
+AllowShortIfStatementsOnASingleLine: Never
+ColumnLimit: 120
+DerivePointerAlignment: false
+PointerAlignment: Left
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveDeclarations: true
+AlignOperands: true
+
+BreakBeforeBraces: Allman
+BraceWrapping:
+  AfterEnum: true
+  AfterStruct: true
+  AfterCaseLabel: true
+  AfterControlStatement: Always
+  SplitEmptyFunction: true
+
+BreakBeforeBinaryOperators: All
+
+BinPackArguments: false
+BinPackParameters: false
+
+ExperimentalAutoDetectBinPacking: false
+AllowAllParametersOfDeclarationOnNextLine: false
+
+AllowShortFunctionsOnASingleLine: None
+
+SortIncludes: false
