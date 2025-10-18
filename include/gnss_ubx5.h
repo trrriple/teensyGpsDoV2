@@ -27,8 +27,10 @@ enum class UbxType : uint8_t {
   // MON
   MON_HW,        // 0x0A 0x09
   MON_VER,       // 0x0A 0x04
-  // CFG (classify-only; typically not “decoded”)
-  CFG_MSG        // 0x06 0x01
+  // CFG
+  CFG_MSG,        // 0x06 0x01
+  CFG_TMODE,      // 0x06 0x1D
+
 };
 
 struct UbxTimTp
@@ -54,6 +56,16 @@ struct UbxTimSvin
     bool     active    = false;
 };
 
+// CFG-TMODE (u-blox 5) decode target (payload len = 28)
+struct UbxCfgTmode {
+  uint32_t timeMode        = 0;   // 0=Disabled, 1=Survey-In, 2=Fixed
+  int32_t  fixedX_cm       = 0;   // ECEF X (cm)
+  int32_t  fixedY_cm       = 0;   // ECEF Y (cm)
+  int32_t  fixedZ_cm       = 0;   // ECEF Z (cm)
+  uint32_t fixedVar_mm2    = 0;   // fixed position 3D variance (mm^2)
+  uint32_t svinMinDur_s    = 0;   // survey-in min duration (s)
+  uint32_t svinVarLimit_mm2= 0;   // survey-in variance limit (mm^2)
+};
 
 // ---------------- NMEA message structs ----------------
 struct SatInfo
@@ -152,6 +164,8 @@ bool gnssParseGsv(char* line, NmeaGsv& out);
 // ---------- Public: UBX decoders ----------
 bool gnssDecodeTimTp(const UbxFrame& fr, UbxTimTp& outTp);
 bool gnssDecodeTimSvin(const UbxFrame& fr, UbxTimSvin& outSvin);
+bool gnssDecodeCfgTmode(const UbxFrame& fr, UbxCfgTmode& out);
+
 
 // ---------- Public: message control ----------
 void gnssSendPubx40(Stream& s, const char* msg, bool enable);                                    // $PUBX,40,<msg>,...

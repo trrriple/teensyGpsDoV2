@@ -11,7 +11,7 @@
 
 
 // ---- Options ----
-static const bool k_EnableSurveyIn = true;  // <-- toggle here
+static const bool k_enableSurveyIn = true;  // <-- toggle here
 
 
 // ====== Hold the most recent decoded NMEA structs ======
@@ -23,6 +23,9 @@ static bool    g_haveRmc = false;
 
 static NmeaGsa g_gsa;
 static bool    g_haveGsa = false;
+
+static bool g_svinSubscribed  = false;
+static bool g_svinStartedByUs = false;
 
 // ====== GSV epoch aggregator ======
 static SatInfo g_gsvSats[64];
@@ -108,14 +111,18 @@ void setup()
     gnssSendUbxCfgMsg(GNSS_SERIAL, 0x0D, 0x01, /*UART1*/ 1, /*rate*/ 1);
     gnssSendUbxCfgMsg(GNSS_SERIAL, 0x0D, 0x04, /*UART1*/ 1, /*rate*/ 1);
 
-
-    if (k_EnableSurveyIn)
-    {
-        gnssEnableSurveyIn(GNSS_SERIAL, 600, 9000000U);
-        CONSOLE.println("Survey-In requested (min 10m, sigma<=3 m).");
-    }
-
     _gsvReset();
+
+
+    gnssPollCfgTmode(GNSS_SERIAL);   // We'll decide what to do in the UBX handler below.
+
+
+    // if (k_enableSurveyIn)
+    // {
+    //     gnssEnableSurveyIn(GNSS_SERIAL, 600, 9000000U);
+    //     CONSOLE.println("Survey-In requested (min 10m, sigma<=3 m).");
+    // }
+
 }
 
 // ====== Main Loop  ======
@@ -183,19 +190,66 @@ void loop()
         UbxType t;
         if (!gnssClassifyUbx(fr, t))
         {
-            // Unknown → ignore or log
             continue;
         }
 
         switch (t)
         {
-            case UbxType::TIM_TP:
+            case UbxType::CFG_TMODE:
             {
-                UbxTimTp tp;
-                if (gnssDecodeTimTp(fr, tp))
+                UbxCfgTmode tm;
+                if (gnssDecodeCfgTmode(fr, tm))
                 {
-                    lastQerrNs = tp.qErrNs;
-                    haveTimTp  = true;
+                    const char* modeStr = "Unknown";
+                    if (tm.timeMode == 0)
+                    {
+                        modeStr = "Disabled";
+                    }
+                    else if (tm.timeMode == 1)
+                    {
+                        modeStr = "Survey-In";
+                    }
+                    else if (tm.timeMode == 2)
+                    {
+                        modeStr = "Fixed";
+                    }
+
+                    CONSOLE.print("[TMODE] ");
+                    CONSOLE.println(modeStr);
+
+                    // --- Decision logic ---
+                    if (tm.timeMode == 2)
+                    {
+                        // Already Fixed → ensure we are NOT subscribed to TIM-SVIN
+                        if (g_svinSubscribed)
+                        {
+                            gnssSendUbxCfgMsg(GNSS_SERIAL, 0x0D, 0x04, /*UART1*/ 1, /*rate*/ 0);  // disable TIM-SVIN
+                            g_svinSubscribed  = false;
+                            g_svinStartedByUs = false;
+                            CONSOLE.println("[SVIN] Unsubscribed TIM-SVIN (Fixed confirmed).");
+                        }
+                        // Nothing else to do.
+                    }
+                    else
+                    {
+                        // Not Fixed yet
+                        if (k_enableSurveyIn && !g_svinSubscribed)
+                        {
+                            // Start Survey-In and subscribe to TIM-SVIN *now*
+                            // Set your thresholds here:
+                            const uint32_t minDurSec = 12UL * 3600UL;  // example: 12 hours
+                            const uint32_t varLimit  = 100U * 100U;    // example: σ ≤ 100 mm → 10,000 mm^2
+
+                            gnssEnableSurveyIn(GNSS_SERIAL, minDurSec, varLimit);
+                            g_svinStartedByUs = true;
+
+                            // Stream Survey-In status (1 Hz) while we run it
+                            gnssSendUbxCfgMsg(GNSS_SERIAL, 0x0D, 0x04, /*UART1*/ 1, /*rate*/ 1);  // TIM-SVIN
+                            g_svinStartedByUs = true;
+
+                            CONSOLE.println("[SVIN] Started Survey-In and subscribed TIM-SVIN.");
+                        }
+                    }
                 }
                 break;
             }
@@ -205,26 +259,35 @@ void loop()
                 UbxTimSvin sv;
                 if (gnssDecodeTimSvin(fr, sv))
                 {
-                    // Pretty print Survey-In state
                     CONSOLE.print("[SVIN] t=");
                     CONSOLE.print(sv.durSec);
-                    CONSOLE.print(" s  obs=");
+                    CONSOLE.print("s  obs=");
                     CONSOLE.print(sv.obs);
                     CONSOLE.print("  var=");
                     CONSOLE.print(sv.meanV_mm2);
-                    CONSOLE.print(" mm^2  active=");
+                    CONSOLE.print("  active=");
                     CONSOLE.print(sv.active ? "Y" : "N");
                     CONSOLE.print("  valid=");
                     CONSOLE.println(sv.valid ? "Y" : "N");
 
-                    // When Survey-In completes, the receiver auto-switches to Fixed (timeMode=2).
-                    // You can confirm by polling CFG-TMODE and/or stop streaming TIM-SVIN.
-                    if (!sv.active && sv.valid)
+                    // If we started SVIN and it just reported complete → confirm mode switched to Fixed
+                    if (g_svinStartedByUs && !sv.active && sv.valid)
                     {
-                        CONSOLE.println("[SVIN] COMPLETE → Time Mode should be FIXED now");
-                        // Optional: gnssPollCfgTmode(GNSS_SERIAL);
-                        // Optional: disable streaming TIM-SVIN: gnssEnableTimSvinOutput(GNSS_SERIAL, 0);
+                        CONSOLE.println("[SVIN] COMPLETE → polling TMODE to confirm Fixed...");
+                        gnssPollCfgTmode(GNSS_SERIAL);
+                        // We will unsubscribe TIM-SVIN when we actually see CFG-TMODE = Fixed.
                     }
+                }
+                break;
+            }
+
+            case UbxType::TIM_TP:
+            {
+                UbxTimTp tp;
+                if (gnssDecodeTimTp(fr, tp))
+                {
+                    lastQerrNs = tp.qErrNs;
+                    haveTimTp  = true;
                 }
                 break;
             }

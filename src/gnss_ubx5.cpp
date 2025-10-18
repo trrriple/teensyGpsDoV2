@@ -540,6 +540,11 @@ bool gnssClassifyUbx(const UbxFrame& fr, UbxType& outType)
             outType = UbxType::CFG_MSG;
             return true;
         }
+        if (fr.id == 0x1D)
+        {
+            outType = UbxType::CFG_TMODE;
+            return true;
+        }
         return false;
     }
 
@@ -886,6 +891,31 @@ bool gnssDecodeTimSvin(const UbxFrame& fr, UbxTimSvin& out)
     out.obs          = _rdU4(&p[20]);  // observations
     out.valid        = (p[24] != 0);
     out.active       = (p[25] != 0);
+    return true;
+}
+
+bool gnssDecodeCfgTmode(const UbxFrame& fr, UbxCfgTmode& out)
+{
+    if (fr.cls != 0x06 || fr.id != 0x1D || fr.len != 28)
+    {
+        return false;
+    }
+    const uint8_t* p = fr.payload;
+
+    auto rdU4 = [&](int off) -> uint32_t
+    {
+        return (uint32_t)p[off + 0] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16)
+               | ((uint32_t)p[off + 3] << 24);
+    };
+    auto rdI4 = [&](int off) -> int32_t { return (int32_t)rdU4(off); };
+
+    out.timeMode         = rdU4(0);
+    out.fixedX_cm        = rdI4(4);
+    out.fixedY_cm        = rdI4(8);
+    out.fixedZ_cm        = rdI4(12);
+    out.fixedVar_mm2     = rdU4(16);
+    out.svinMinDur_s     = rdU4(20);
+    out.svinVarLimit_mm2 = rdU4(24);
     return true;
 }
 
