@@ -37,7 +37,7 @@ struct UbxTimTp
 {
     uint32_t towMs    = 0;
     uint32_t towSubMs = 0;
-    int32_t  qErrNs   = 0;  // u-blox 5: nanoseconds
+    float    qErrNs   = 0;  // u-blox 5: nanoseconds
     uint16_t week     = 0;
     uint8_t  flags    = 0;
     uint8_t  refInfo  = 0;
@@ -56,15 +56,31 @@ struct UbxTimSvin
     bool     active    = false;
 };
 
+// UBX-NAV-TIMEUTC decode target (payload len = 20 on u-blox 5/7)
+struct UbxNavTimeUtc
+{
+    uint32_t iTowMs = 0;  // GPS time of week of nav epoch (ms)
+    uint32_t tAccNs = 0;  // time accuracy estimate (ns, UTC)
+    int32_t  nanoNs = 0;  // fractional second (can be negative)
+    uint16_t year   = 0;  // 1999..2099
+    uint8_t  month  = 0;  // 1..12
+    uint8_t  day    = 0;  // 1..31
+    uint8_t  hour   = 0;  // 0..23
+    uint8_t  min    = 0;  // 0..59
+    uint8_t  sec    = 0;  // 0..60 (leap second)
+    uint8_t  valid  = 0;  // bitfield: bit0=validTOW, bit1=validWKN, bit2=validUTC
+};
+
 // CFG-TMODE (u-blox 5) decode target (payload len = 28)
-struct UbxCfgTmode {
-  uint32_t timeMode        = 0;   // 0=Disabled, 1=Survey-In, 2=Fixed
-  int32_t  fixedX_cm       = 0;   // ECEF X (cm)
-  int32_t  fixedY_cm       = 0;   // ECEF Y (cm)
-  int32_t  fixedZ_cm       = 0;   // ECEF Z (cm)
-  uint32_t fixedVar_mm2    = 0;   // fixed position 3D variance (mm^2)
-  uint32_t svinMinDur_s    = 0;   // survey-in min duration (s)
-  uint32_t svinVarLimit_mm2= 0;   // survey-in variance limit (mm^2)
+struct UbxCfgTmode
+{
+    uint32_t timeMode         = 0;  // 0=Disabled, 1=Survey-In, 2=Fixed
+    int32_t  fixedX_cm        = 0;  // ECEF X (cm)
+    int32_t  fixedY_cm        = 0;  // ECEF Y (cm)
+    int32_t  fixedZ_cm        = 0;  // ECEF Z (cm)
+    uint32_t fixedVar_mm2     = 0;  // fixed position 3D variance (mm^2)
+    uint32_t svinMinDur_s     = 0;  // survey-in min duration (s)
+    uint32_t svinVarLimit_mm2 = 0;  // survey-in variance limit (mm^2)
 };
 
 // ---------------- NMEA message structs ----------------
@@ -134,8 +150,8 @@ struct NmeaGsv
 };
 
 // ---------- Public: stream split + pop ----------
-void gnssInit(Stream* debugSerial = nullptr);
-void gnssFeedByte(uint8_t c);
+void gnssInit(Stream* gnssSerial, Stream* debugSerial);
+uint32_t gnssReadSerial();
 
 
 // ---------- Public: UBX helpers (parsers live in the lib) ----------
@@ -164,16 +180,18 @@ bool gnssParseGsv(char* line, NmeaGsv& out);
 // ---------- Public: UBX decoders ----------
 bool gnssDecodeTimTp(const UbxFrame& fr, UbxTimTp& outTp);
 bool gnssDecodeTimSvin(const UbxFrame& fr, UbxTimSvin& outSvin);
+bool gnssDecodeNavTimeUtc(const UbxFrame& fr, UbxNavTimeUtc& out);
 bool gnssDecodeCfgTmode(const UbxFrame& fr, UbxCfgTmode& out);
 
 
 // ---------- Public: message control ----------
-void gnssSendPubx40(Stream& s, const char* msg, bool enable);                                    // $PUBX,40,<msg>,...
-void gnssSendUbxCfgMsg(Stream& s, uint8_t cls, uint8_t id, uint8_t targetPortId, uint8_t rate);  // UBX-CFG-MSG
-void gnssEnableSurveyIn(Stream& s, uint32_t minDurSec, uint32_t varLimit_mm2);
-void gnssSetFixedPositionECEF(Stream& s, int32_t x_cm, int32_t y_cm, int32_t z_cm, uint32_t posVar_mm2);
-void gnssDisableTimeMode(Stream& s);
-void gnssPollCfgTmode(Stream& s);   // ask current TMODE settings
+void gnssSendPubx40(const char* msg, bool enable);                                    // $PUBX,40,<msg>,...
+void gnssSendUbxCfgMsg(uint8_t cls, uint8_t id, uint8_t targetPortId, uint8_t rate);  // UBX-CFG-MSG
+void gnssEnableSurveyIn(uint32_t minDurSec, uint32_t varLimit_mm2);
+
+void gnssSetFixedPositionECEF(int32_t x_cm, int32_t y_cm, int32_t z_cm, uint32_t posVar_mm2);
+void gnssDisableTimeMode();
+void gnssPollCfgTmode();   // ask current TMODE settings
 
 
 // ---------- Public: checksum helpers ----------

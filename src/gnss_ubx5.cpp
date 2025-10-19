@@ -41,6 +41,8 @@ enum _UbxState
     S_CK_B
 };
 
+static Stream* _gnss = nullptr;
+
 static _UbxState _uState = S_WAIT_SYNC1;
 static uint8_t   _uClass = 0, _uId = 0;
 static uint16_t  _uLen = 0, _uPos = 0;
@@ -129,7 +131,7 @@ bool nmeaTruncateAtStar(char* line)
     return true;
 }
 
-void gnssSendPubx40(Stream& s, const char* msg, bool enable)
+void gnssSendPubx40(const char* msg, bool enable)
 {
     // $PUBX,40,<msg>,0,<on_off>,0,0,0,0*CS\r\n
     char payload[64];
@@ -138,7 +140,7 @@ void gnssSendPubx40(Stream& s, const char* msg, bool enable)
     nmeaComputeChecksum(payload, cs);
     char line[80];
     snprintf(line, sizeof(line), "$%s*%c%c\r\n", payload, cs[0], cs[1]);
-    s.print(line);
+    _gnss->print(line);
 }
 
 // ---- UBX checksum helpers ----
@@ -236,8 +238,9 @@ static double _dmToDeg(const char* dm)
 }
 
 // ---------------- Public: stream split + pop ----------------
-void gnssInit(Stream* debugSerial)
+void gnssInit(Stream* gnssSerial, Stream* debugSerial)
 {
+    _gnss = gnssSerial;
     _dbg = debugSerial;
 
     _nmeaLen        = 0;
@@ -260,163 +263,172 @@ void gnssInit(Stream* debugSerial)
     }
 }
 
-void gnssFeedByte(uint8_t c)
+uint32_t gnssReadSerial()
 {
-    // ---- UBX FSM ----
-    switch (_uState)
+    uint32_t bytesRead = 0;
+
+    while (_gnss->available())
     {
-        case S_WAIT_SYNC1:
+        uint8_t c = (uint8_t)_gnss->read();
+        bytesRead++;
+        // ---- UBX FSM ----
+        switch (_uState)
         {
-            if (c == _UBX_SYNC1)
+            case S_WAIT_SYNC1:
             {
-                _uState = S_WAIT_SYNC2;
-            }
-            break;
-        }
-        case S_WAIT_SYNC2:
-        {
-            if (c == _UBX_SYNC2)
-            {
-                _uState = S_CLASS;
-                _ckReset();
-            }
-            else
-            {
-                _uState = S_WAIT_SYNC1;
-            }
-            break;
-        }
-        case S_CLASS:
-        {
-            _uClass = c;
-            _ckAcc(c);
-            _uState = S_ID;
-            break;
-        }
-        case S_ID:
-        {
-            _uId = c;
-            _ckAcc(c);
-            _uState = S_LEN1;
-            break;
-        }
-        case S_LEN1:
-        {
-            _uLen = c;
-            _ckAcc(c);
-            _uState = S_LEN2;
-            break;
-        }
-        case S_LEN2:
-        {
-            _uLen |= ((uint16_t)c << 8);
-            _ckAcc(c);
-            if (_uLen >= sizeof(_uPayload))
-            {
-                if (_dbg != nullptr)
+                if (c == _UBX_SYNC1)
                 {
-                    _dbg->println("[gnss] UBX oversize");
+                    _uState = S_WAIT_SYNC2;
+                }
+                break;
+            }
+            case S_WAIT_SYNC2:
+            {
+                if (c == _UBX_SYNC2)
+                {
+                    _uState = S_CLASS;
+                    _ckReset();
+                }
+                else
+                {
+                    _uState = S_WAIT_SYNC1;
+                }
+                break;
+            }
+            case S_CLASS:
+            {
+                _uClass = c;
+                _ckAcc(c);
+                _uState = S_ID;
+                break;
+            }
+            case S_ID:
+            {
+                _uId = c;
+                _ckAcc(c);
+                _uState = S_LEN1;
+                break;
+            }
+            case S_LEN1:
+            {
+                _uLen = c;
+                _ckAcc(c);
+                _uState = S_LEN2;
+                break;
+            }
+            case S_LEN2:
+            {
+                _uLen |= ((uint16_t)c << 8);
+                _ckAcc(c);
+                if (_uLen >= sizeof(_uPayload))
+                {
+                    if (_dbg != nullptr)
+                    {
+                        _dbg->println("[gnss] UBX oversize");
+                    }
+                    _uState = S_WAIT_SYNC1;
+                }
+                else
+                {
+                    _uPos   = 0;
+                    _uState = S_PAYLOAD;
+                }
+                break;
+            }
+            case S_PAYLOAD:
+            {
+                _uPayload[_uPos++] = c;
+                _ckAcc(c);
+                if (_uPos >= _uLen)
+                {
+                    _uState = S_CK_A;
+                }
+                break;
+            }
+            case S_CK_A:
+            {
+                if (c == _uCkA)
+                {
+                    _uState = S_CK_B;
+                }
+                else
+                {
+                    if (_dbg != nullptr)
+                    {
+                        _dbg->println("[gnss] UBX ckA fail");
+                    }
+                    _uState = S_WAIT_SYNC1;
+                }
+                break;
+            }
+            case S_CK_B:
+            {
+                if (c == _uCkB)
+                {
+                    // latch + handlers
+                    _lastUbx.cls = _uClass;
+                    _lastUbx.id  = _uId;
+                    _lastUbx.len = _uLen;
+                    if (_lastUbx.len > sizeof(_lastUbx.payload))
+                    {
+                        _lastUbx.len = sizeof(_lastUbx.payload);
+                    }
+                    if (_lastUbx.len > 0)
+                    {
+                        memcpy(_lastUbx.payload, _uPayload, _lastUbx.len);
+                    }
+                    _haveNewUbx = true;
+                }
+                else
+                {
+                    if (_dbg != nullptr)
+                    {
+                        _dbg->println("[gnss] UBX ckB fail");
+                    }
                 }
                 _uState = S_WAIT_SYNC1;
+                break;
             }
-            else
-            {
-                _uPos   = 0;
-                _uState = S_PAYLOAD;
-            }
-            break;
         }
-        case S_PAYLOAD:
+
+        // ---- NMEA line buffer ----
+        if (c == '\r')
         {
-            _uPayload[_uPos++] = c;
-            _ckAcc(c);
-            if (_uPos >= _uLen)
-            {
-                _uState = S_CK_A;
-            }
-            break;
+            return bytesRead;
         }
-        case S_CK_A:
+        if (c == '\n')
         {
-            if (c == _uCkA)
+            if (_nmeaLen >= 7 && _nmeaBuf[0] == '$')
             {
-                _uState = S_CK_B;
-            }
-            else
-            {
-                if (_dbg != nullptr)
+                _nmeaBuf[_nmeaLen] = '\0';
+                size_t n           = _nmeaLen;
+                if (n >= _NMEA_MAX)
                 {
-                    _dbg->println("[gnss] UBX ckA fail");
+                    n = _NMEA_MAX - 1;
                 }
-                _uState = S_WAIT_SYNC1;
+                memcpy(_lastRawNmea, _nmeaBuf, n);
+                _lastRawNmea[n] = '\0';
+                _lastRawNmeaLen = n;
+                _hasNewNmea     = true;
             }
-            break;
+            _nmeaLen = 0;
+            return bytesRead;
         }
-        case S_CK_B:
+        if (_nmeaLen < (_NMEA_MAX - 1))
         {
-            if (c == _uCkB)
+            _nmeaBuf[_nmeaLen++] = (char)c;
+        }
+        else
+        {
+            if (_dbg != nullptr)
             {
-                // latch + handlers
-                _lastUbx.cls = _uClass;
-                _lastUbx.id  = _uId;
-                _lastUbx.len = _uLen;
-                if (_lastUbx.len > sizeof(_lastUbx.payload))
-                {
-                    _lastUbx.len = sizeof(_lastUbx.payload);
-                }
-                if (_lastUbx.len > 0)
-                {
-                    memcpy(_lastUbx.payload, _uPayload, _lastUbx.len);
-                }
-                _haveNewUbx = true;
+                _dbg->println("[gnss] NMEA overflow, drop line");
             }
-            else
-            {
-                if (_dbg != nullptr)
-                {
-                    _dbg->println("[gnss] UBX ckB fail");
-                }
-            }
-            _uState = S_WAIT_SYNC1;
-            break;
+            _nmeaLen = 0;
         }
     }
 
-    // ---- NMEA line buffer ----
-    if (c == '\r')
-    {
-        return;
-    }
-    if (c == '\n')
-    {
-        if (_nmeaLen >= 7 && _nmeaBuf[0] == '$')
-        {
-            _nmeaBuf[_nmeaLen] = '\0';
-            size_t n           = _nmeaLen;
-            if (n >= _NMEA_MAX)
-            {
-                n = _NMEA_MAX - 1;
-            }
-            memcpy(_lastRawNmea, _nmeaBuf, n);
-            _lastRawNmea[n] = '\0';
-            _lastRawNmeaLen = n;
-            _hasNewNmea     = true;
-        }
-        _nmeaLen = 0;
-        return;
-    }
-    if (_nmeaLen < (_NMEA_MAX - 1))
-    {
-        _nmeaBuf[_nmeaLen++] = (char)c;
-    }
-    else
-    {
-        if (_dbg != nullptr)
-        {
-            _dbg->println("[gnss] NMEA overflow, drop line");
-        }
-        _nmeaLen = 0;
-    }
+    return bytesRead;
 }
 
 bool gnssHasNewNmea()
@@ -513,6 +525,12 @@ bool gnssClassifyUbx(const UbxFrame& fr, UbxType& outType)
             outType = UbxType::NAV_TIMEUTC;
             return true;
         }
+        if (fr.id == 0x21)
+        {
+            outType = UbxType::NAV_TIMEUTC;
+            return true;
+        }
+
         return false;
     }
 
@@ -867,7 +885,7 @@ bool gnssDecodeTimTp(const UbxFrame& fr, UbxTimTp& outTp)
     const uint8_t* p = fr.payload;
     outTp.towMs      = _rdU4(&p[0]);
     outTp.towSubMs   = _rdU4(&p[4]);
-    outTp.qErrNs     = _rdI4(&p[8]);  // ns on u-blox 5
+    outTp.qErrNs     = _rdI4(&p[8]) / 1000.0;  // ns on u-blox 5
     outTp.week       = _rdU2(&p[12]);
     outTp.flags      = p[14];
     outTp.refInfo    = p[15];
@@ -891,6 +909,35 @@ bool gnssDecodeTimSvin(const UbxFrame& fr, UbxTimSvin& out)
     out.obs          = _rdU4(&p[20]);  // observations
     out.valid        = (p[24] != 0);
     out.active       = (p[25] != 0);
+    return true;
+}
+
+bool gnssDecodeNavTimeUtc(const UbxFrame& fr, UbxNavTimeUtc& out)
+{
+    if (fr.cls != 0x01 || fr.id != 0x21 || fr.len != 20)
+    {
+        return false;
+    }
+    const uint8_t* p = fr.payload;
+
+    auto rdU4 = [&](int off) -> uint32_t
+    {
+        return (uint32_t)p[off + 0] | ((uint32_t)p[off + 1] << 8) | ((uint32_t)p[off + 2] << 16)
+               | ((uint32_t)p[off + 3] << 24);
+    };
+    auto rdI4 = [&](int off) -> int32_t { return (int32_t)rdU4(off); };
+    auto rdU2 = [&](int off) -> uint16_t { return (uint16_t)p[off + 0] | ((uint16_t)p[off + 1] << 8); };
+
+    out.iTowMs = rdU4(0);  // iTOW
+    out.tAccNs = rdU4(4);  // tAcc (UTC)
+    out.nanoNs = rdI4(8);  // nano (can be negative)
+    out.year   = rdU2(12);
+    out.month  = p[14];
+    out.day    = p[15];
+    out.hour   = p[16];
+    out.min    = p[17];
+    out.sec    = p[18];
+    out.valid  = p[19];
     return true;
 }
 
@@ -920,7 +967,7 @@ bool gnssDecodeCfgTmode(const UbxFrame& fr, UbxCfgTmode& out)
 }
 
 // ---------------- UBX config (public) ----------------
-static void _sendUbxFrame(Stream& s, uint8_t cls, uint8_t id, const uint8_t* payload, uint16_t len)
+static void _sendUbxFrame(uint8_t cls, uint8_t id, const uint8_t* payload, uint16_t len)
 {
     uint8_t ckA = 0;
     uint8_t ckB = 0;
@@ -930,27 +977,26 @@ static void _sendUbxFrame(Stream& s, uint8_t cls, uint8_t id, const uint8_t* pay
         ckB = (uint8_t)(ckB + ckA);
     };
 
-    s.write(0xB5);
-    s.write(0x62);
-    s.write(cls);
+    _gnss->write(0xB5);
+    _gnss->write(0x62);
+    _gnss->write(cls);
     acc(cls);
-    s.write(id);
+    _gnss->write(id);
     acc(id);
-    s.write((uint8_t)(len & 0xFF));
+    _gnss->write((uint8_t)(len & 0xFF));
     acc((uint8_t)(len & 0xFF));
-    s.write((uint8_t)(len >> 8));
+    _gnss->write((uint8_t)(len >> 8));
     acc((uint8_t)(len >> 8));
     for (uint16_t i = 0; i < len; ++i)
     {
-        s.write(payload[i]);
+        _gnss->write(payload[i]);
         acc(payload[i]);
     }
-    s.write(ckA);
-    s.write(ckB);
+    _gnss->write(ckA);
+    _gnss->write(ckB);
 }
 
-static void _sendCfgTmode(Stream&  s,
-                          uint32_t timeMode,
+static void _sendCfgTmode(uint32_t timeMode,
                           int32_t  x_cm,
                           int32_t  y_cm,
                           int32_t  z_cm,
@@ -976,10 +1022,10 @@ static void _sendCfgTmode(Stream&  s,
     wrU4(20, svinMinDur_s);      // survey-in minimum duration (s)
     wrU4(24, svinVarLimit_mm2);  // survey-in variance limit (mm^2)
 
-    _sendUbxFrame(s, 0x06, 0x1D, p, sizeof(p));
+    _sendUbxFrame(0x06, 0x1D, p, sizeof(p));
 }
 
-void gnssSendUbxCfgMsg(Stream& s, uint8_t cls, uint8_t id, uint8_t targetPortId, uint8_t rate)
+void gnssSendUbxCfgMsg(uint8_t cls, uint8_t id, uint8_t targetPortId, uint8_t rate)
 {
     // u-blox 5: payload = [cls id rateI2C rateUART1 rateUART2 rateUSB rateSPI rateReserved(0)]
     uint8_t p[8] = {cls, id, 0, 0, 0, 0, 0, 0};
@@ -987,26 +1033,26 @@ void gnssSendUbxCfgMsg(Stream& s, uint8_t cls, uint8_t id, uint8_t targetPortId,
     {
         p[2 + targetPortId] = rate;
     }
-    _sendUbxFrame(s, 0x06, 0x01, p, sizeof(p));  // CFG-MSG
+    _sendUbxFrame(0x06, 0x01, p, sizeof(p));  // CFG-MSG
 }
 
-void gnssEnableSurveyIn(Stream& s, uint32_t minDurSec, uint32_t varLimit_mm2)
+void gnssEnableSurveyIn(uint32_t minDurSec, uint32_t varLimit_mm2)
 {
-    _sendCfgTmode(s, /*Survey-In*/ 1, 0, 0, 0, 0, minDurSec, varLimit_mm2);
+    _sendCfgTmode(/*Survey-In*/ 1, 0, 0, 0, 0, minDurSec, varLimit_mm2);
 }
 
-void gnssSetFixedPositionECEF(Stream& s, int32_t x_cm, int32_t y_cm, int32_t z_cm, uint32_t posVar_mm2)
+void gnssSetFixedPositionECEF(int32_t x_cm, int32_t y_cm, int32_t z_cm, uint32_t posVar_mm2)
 {
-    _sendCfgTmode(s, /*Fixed*/ 2, x_cm, y_cm, z_cm, posVar_mm2, 0, 0);
+    _sendCfgTmode(/*Fixed*/ 2, x_cm, y_cm, z_cm, posVar_mm2, 0, 0);
 }
 
-void gnssDisableTimeMode(Stream& s)
+void gnssDisableTimeMode()
 {
-    _sendCfgTmode(s, /*Disabled*/ 0, 0, 0, 0, 0, 0, 0);
+    _sendCfgTmode(/*Disabled*/ 0, 0, 0, 0, 0, 0, 0);
 }
 
-void gnssPollCfgTmode(Stream& s)
+void gnssPollCfgTmode()
 {
     // Empty payload poll → device replies with CFG-TMODE containing current settings/state
-    _sendUbxFrame(s, 0x06, 0x1D, nullptr, 0);
+    _sendUbxFrame(0x06, 0x1D, nullptr, 0);
 }
