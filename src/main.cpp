@@ -2,9 +2,10 @@
 // Teensy 4.0 + u-blox LEA-5T (FW 6.02)
 
 #include <Arduino.h>
+#include <imxrt.h>
 #include "gnss_ubx5.h"
-#include "extIntFreqCount.h"
 #include "DAC8550.h"
+
 
 // ---- Options ----
 static const bool     k_enableSurveyIn         = true;
@@ -51,8 +52,6 @@ static bool    g_gsvComplete = false;
 // ========= Pinout ==============
 #define GNSS_SERIAL Serial5
 #define CONSOLE Serial
-#define PPS_PIN 7
-// 10 MHz Clock has to be on pin 9
 
 #define LOCKED_LED_PIN 15
 #define PPS_LED_PIN 14
@@ -94,6 +93,112 @@ GpsdoCtrl g_gpsDoCtrl;
 
 // ============== DAC ====================
 DAC8550 g_clkDac(DAC_CS_PIN);
+
+
+static uint32_t tenMhzCountsViaIsr = 0;
+
+static uint32_t _readCountRaw()
+{
+    static uint32_t countPrev = 0;
+
+    IMXRT_TMR_t *TMRx = &IMXRT_TMR3;
+
+    uint32_t count = TMRx->CH[1].CNTR  | (TMRx->CH[2].HOLD << 16); // atomic
+
+    uint32_t countOutput = count - countPrev;
+    countPrev            = count;
+
+    return countOutput;
+}
+
+
+static void _ppsIsr(void)
+{
+    tenMhzCountsViaIsr = _readCountRaw();
+}
+
+static bool _poll10MHzCount(uint32_t* out_capt)
+{
+    static uint32_t countPrev = 0;
+
+
+    IMXRT_TMR_t* TMRx = &IMXRT_TMR3;
+
+    if ((TMRx->CH[0].SCTRL & TMR_SCTRL_IEF) && (TMRx->CH[2].SCTRL & TMR_SCTRL_IEF))
+    {                                        
+        uint32_t count = TMRx->CH[0].CAPT | (TMRx->CH[2].CAPT << 16);
+        TMRx->CH[0].SCTRL &= ~TMR_SCTRL_IEF;
+        TMRx->CH[2].SCTRL &= ~TMR_SCTRL_IEF;
+
+        uint32_t countOutput = count - countPrev;
+        countPrev            = count;
+
+        if (out_capt)
+            *out_capt = countOutput;
+        return true;
+    }
+    return false;
+}
+
+static void _counterInit(void)
+{
+    // Enable QTIMER3 clock
+    CCM_CCGR6 |= CCM_CCGR6_QTIMER3(CCM_CCGR_ON);
+
+    // Pin mux:
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_AD_B1_00 = 0b10001;  // QT3 TIMER0 on pin 19
+    IOMUXC_QTIMER3_TIMER0_SELECT_INPUT  = 0b01;
+
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_AD_B1_01 = 0b10001;   // QT3 TIMER1 on pin 18
+    IOMUXC_QTIMER3_TIMER1_SELECT_INPUT  = 0b00;
+
+    IMXRT_TMR_t *TMRx = &IMXRT_TMR3;
+
+    // ---------------- CH0: 10 MHz low word ----------------
+    TMRx->CH[0].CTRL   = 0;          // stop
+    TMRx->CH[0].CNTR   = 0;
+    TMRx->CH[0].LOAD   = 0;          // reload value after trigger
+    TMRx->CH[0].COMP1  = 0xFFFF - 1;
+    TMRx->CH[0].CMPLD1 = 0xFFFF - 1;
+    TMRx->CH[0].SCTRL  = TMR_SCTRL_CAPTURE_MODE(1);
+    TMRx->CH[0].FILT   = 0;
+    TMRx->CH[0].CSCTRL = 0;
+
+    // ---------------- CH0: 10 MHz high word ----------------
+    TMRx->CH[2].CTRL   = 0;  // stop
+    TMRx->CH[2].CNTR   = 0;
+    TMRx->CH[2].LOAD   = 0;  // reload value after trigger
+    TMRx->CH[2].COMP1  = 0;
+    TMRx->CH[2].CMPLD1 = 0;
+    TMRx->CH[2].SCTRL  = TMR_SCTRL_CAPTURE_MODE(1);
+    TMRx->CH[2].FILT   = 0;
+    TMRx->CH[2].CSCTRL = 0;
+
+    // Configure Channel 1 which isn't used, but for some reason without this block 
+    // Pin 18 was not able to accept a clock (the voltage was getting pulled down)
+    // We're using Channel 1's external input as our secondary clock source for capturing 
+    // pulse count via PPS
+    TMRx->CH[1].CTRL   = 0;          // stop
+    TMRx->CH[1].CNTR   = 0;
+    TMRx->CH[1].LOAD   = 0;          // reload value after trigger
+    TMRx->CH[1].COMP1  = 0xFFFF - 1;
+    TMRx->CH[1].CMPLD1 = 0xFFFF - 1;
+    TMRx->CH[1].SCTRL  = 0;
+    TMRx->CH[1].FILT   = 0;
+    TMRx->CH[1].CSCTRL = 0;
+
+
+    // Start timer 0 to count 10 MHz on pin 19 (PCS(0) using pin 18 (PCS(1)) to capture 
+    // current value
+    TMRx->CH[0].CTRL = TMR_CTRL_CM(1) | TMR_CTRL_PCS(0b0000) | TMR_CTRL_SCS(0b01) | TMR_CTRL_LENGTH;
+
+    // Enable ripple into counter channel 2 so we have 32 bits
+    TMRx->CH[2].CTRL = TMR_CTRL_CM(7) | TMR_CTRL_PCS(0b0100) | TMR_CTRL_SCS(0b01);
+
+    attachInterruptVector(IRQ_QTIMER3, _ppsIsr);
+    NVIC_SET_PRIORITY(IRQ_QTIMER3, 64); // pick a reasonable prio
+    NVIC_ENABLE_IRQ(IRQ_QTIMER3);
+}
 
 // ============ Helper functions ==============
 static void _gsvReset()
@@ -151,6 +256,7 @@ static void _printUtcFromHhmmss(double hhmmss)
     CONSOLE.printf("%02d:%02d:%06.3f", hh, mm, ss);
 }
 
+
 // ====== Main Setup  ======
 void setup()
 {
@@ -160,7 +266,6 @@ void setup()
         // wait for USB
     }
 
-    
     pinMode(PPS_LED_PIN, OUTPUT);
     digitalWrite(PPS_LED_PIN, LOW);
 
@@ -195,13 +300,14 @@ void setup()
     CONSOLE.printf("Initializing DAC\r\n");
     SPI.begin();
     g_clkDac.begin();
-    int targetVoltageRaw = _getDacVal(2.5);
+    int targetVoltageRaw = _getDacVal(1.9);
     g_clkDac.setValue(targetVoltageRaw);
     CONSOLE.printf("DAC Initialized\r\n");
 
     // setup pulse monitoring
     CONSOLE.printf("Beginning Pulse Counting \r\n");
-    ExtIntFreqCount.begin(PPS_PIN, FALLING); /* pin to trigger cycle capture */
+
+    _counterInit();
 }
 
 static void _handleGnss()
@@ -526,25 +632,29 @@ static void _handleConsole()
 
 static int32_t _handlePps()
 {
-    if (ExtIntFreqCount.available())
+    uint32_t tenMHzCount = 0;
+
+    /* if this is true, we've gotten a PPS and latched the 10MHzCount in hardware */
+    if (_poll10MHzCount(&tenMHzCount))
     {
-        g_tLastpps_ms   = millis();
+        CONSOLE.printf("tenMHzCount %i\r\n", tenMHzCount);
+        CONSOLE.printf("tenMhzCountsViaIsr %i\r\n", _readCountRaw());
 
-        uint32_t count = ExtIntFreqCount.read();
+        g_tLastpps_ms = millis();
 
-        if(count == 0)
-        {   
-            CONSOLE.printf("Error: Clock not detected \r\n", count);
-            count = -1;
-        }
-
-        else if (count > 10000100 || count < 9999900)
+        if (tenMHzCount == 0)
         {
-            CONSOLE.printf("Warning, Clk count significantly out of range: %i\r\n", count);
-            count = 0;
+            CONSOLE.printf("Error: Clock not detected \r\n", tenMHzCount);
+            tenMHzCount = -1;
         }
 
-        return count;
+        else if (tenMHzCount > 10000100 || tenMHzCount < 9999900)
+        {
+            CONSOLE.printf("Warning, Clk count significantly out of range: %i\r\n", tenMHzCount);
+            tenMHzCount = 0;
+        }
+
+        return tenMHzCount;
     }
 
     return 0;
@@ -737,18 +847,20 @@ static void _handleLeds()
     }
 }
 
+
 // ====== Main Loop  ======
 
 void loop()
 {
-    int32_t clkCount = _handlePps();
+    
+    int32_t tenMHzCount = _handlePps();
 
-    if (clkCount > 0)
+    if (tenMHzCount > 0)
     {
         g_tuningCycle = true;
         g_clkRxErr    = false;
     }
-    else if (clkCount == -1)
+    else if (tenMHzCount == -1)
     {
         g_clkRxErr = true;
     }
@@ -761,7 +873,7 @@ void loop()
 
     if (g_tuningCycle)
     {
-        _handleOscTuning(clkCount);
+        _handleOscTuning(tenMHzCount);
         g_gpsMsgs.haveTimTp = false;
     }
 
