@@ -7,14 +7,18 @@
 #include "DAC8550.h"
 
 // ---- Options ----
-static const bool     k_enableSurveyIn    = true;
-static const uint32_t k_surveyInMinDurSec = 600;
-static const uint32_t k_surveyInVarLimit  = 900000;
+static const bool     k_enableSurveyIn         = true;
+static const uint32_t k_surveyInMinDurSec      = 600;
+static const uint32_t k_surveyInVarLimit       = 900000;
+static const uint32_t k_requiredGoodCyclesLock = 10;
+static const uint32_t k_requiredPhaseErr_ns    = 2;
 
 // ----- State -----
-static bool g_svinSubscribed  = false;
-static bool g_svinStartedByUs = false;
-static bool g_tuningCycle     = false;
+static bool     g_svinSubscribed  = false;
+static bool     g_svinStartedByUs = false;
+static bool     g_tuningCycle     = false;
+static uint32_t g_tLastpps_ms     = 0;
+static bool     g_clkRxErr        = false;
 
 // ====== Hold the most recent decoded NMEA/ubx structs ======
 struct GpsMsgs
@@ -66,17 +70,18 @@ struct GpsdoCtrl
     double ocxoHzPerVolt = 5.0;  // OCXO EFC sensitivity (Hz/V), signed
     double vMin          = 0.0;
     double vMax          = DAC_VREF;  // clamps for DAC output voltage (defaults 0..vref)
-    double slewVoltsMax  = 0.0010;    // max change per second (V)
+    double slewVoltsMax  = 0.010;    // max change per second (V)
 
     // Gains
     double Kp = 0.1;
-    double Ki = 0.00005;
+    double Ki = 0.0005;
 
     // Internals
     uint32_t nExp          = 10000000u;
     double   f0            = 10000000.0;
     double   integ         = 0.0;             // phase integrator (s)
     double   targetVoltage = 1.80;             // current DAC target (V)
+    uint8_t  goodCycles    = 0;
     bool     locked        = false;
 
     // Metrics
@@ -191,8 +196,6 @@ void setup()
     SPI.begin();
     g_clkDac.begin();
     int targetVoltageRaw = _getDacVal(2.5);
-
-    CONSOLE.printf("Raw %i\r\n", targetVoltageRaw);
     g_clkDac.setValue(targetVoltageRaw);
     CONSOLE.printf("DAC Initialized\r\n");
 
@@ -521,16 +524,24 @@ static void _handleConsole()
     }
 }
 
-static uint32_t _handlePps()
+static int32_t _handlePps()
 {
     if (ExtIntFreqCount.available())
     {
+        g_tLastpps_ms   = millis();
+
         uint32_t count = ExtIntFreqCount.read();
 
-        if (count > 10000100 || count < 9999900)
+        if(count == 0)
+        {   
+            CONSOLE.printf("Error: Clock not detected \r\n", count);
+            count = -1;
+        }
+
+        else if (count > 10000100 || count < 9999900)
         {
             CONSOLE.printf("Warning, Clk count significantly out of range: %i\r\n", count);
-            count = 10000000;
+            count = 0;
         }
 
         return count;
@@ -539,79 +550,86 @@ static uint32_t _handlePps()
     return 0;
 }
 
-void handleOscTuning(uint32_t count, bool haveQerr, float qErr_ns)
+void _handleOscTuning(int32_t count)
 {
-    CONSOLE.printf("Tuning: Count %i, have Qerr %i, qErr %f \r\n", count, haveQerr, qErr_ns);
+    // Inputs from GPS timepulse quality
+    const bool  haveQerr = g_gpsMsgs.haveTimTp;
+    const float qErr_ns  = g_gpsMsgs.timTp.qErrNs;
 
     // 1) Signed cycle error
-    int64_t dCycles_raw = (int64_t)count - (int64_t)g_gpsDoCtrl.nExp;
+    const int64_t dCycles_raw = (int64_t)count - (int64_t)g_gpsDoCtrl.nExp;
 
+    // Base: subtract fractional cycle from qErr if we have it
     double dCycles = (double)dCycles_raw - (haveQerr ? (double)qErr_ns * 0.01 : 0.0);
-    
-    // Detect the 1-cycle toggling case
-    bool oneCycleFlip = (llabs(dCycles_raw) == 1) && haveQerr && (fabs(qErr_ns) <= 8.0);
-    
-    // If it’s the quantization flip, zero the integer part and keep only the ns
+
+    // Detect the ±1-cycle "quantization flip": counter toggles -1/+0 with small ns error.
+    const bool oneCycleFlip = (llabs(dCycles_raw) == 1) && haveQerr && (fabs(qErr_ns) <= 8.0);
+
+    // If it's the quantization flip, keep only the fine ns error (signed), drop integer part
     if (oneCycleFlip)
     {
-        dCycles = -(double)qErr_ns * 0.01;  // ≈ a few hundredths of a cycle → a few ns
+        dCycles = -(double)qErr_ns * 0.01;  // a few hundredths of a cycle → a few ns
     }
 
-    // 2) Errors
+    // 2) Phase error in seconds
     g_gpsDoCtrl.phaseErr_s = dCycles / g_gpsDoCtrl.f0;
 
-    // 3) Quality gate (optional)
-    if (!haveQerr && fabs(g_gpsDoCtrl.phaseErr_s) > 5e-6)
+    // 3) Deadband: apply to P only; I integrates full error (so it can "walk" across boundary)
+    //    Exempt the ±1-cycle flip case from deadband entirely so P sees the small ns error.
+    const double deadband_s = 2e-9;
+    const double err_s      = g_gpsDoCtrl.phaseErr_s;
+
+    double errP_s = err_s;  // error seen by the proportional path
+    if (!oneCycleFlip)
     {
-        return;
+        const double aerr = fabs(err_s);
+        if (aerr > deadband_s)
+        {
+            // use only the amount beyond the deadband
+            errP_s = copysign(aerr - deadband_s, err_s);
+        }
+        else
+        {
+            // inside deadband: mute P, but keep I integrating
+            errP_s = 0.0;
+            g_gpsDoCtrl.integ *= 0.999;  // gentle bleed (was 0.995)
+        }
     }
 
-    // 4) deadband + leak
-    const double deadband_s   = 20e-9;
-    double       phaseErrUsed = g_gpsDoCtrl.phaseErr_s;
-    if (fabs(phaseErrUsed) < deadband_s)
-    {
-        phaseErrUsed = 0.0;
-        g_gpsDoCtrl.integ *= 0.995;  // slow bleed near lock
-    }
+    // 4) PI (negative feedback)
+    //    KEY FIX: update the integrator each cycle using full error (not deadbanded)
+    g_gpsDoCtrl.integ += err_s;
 
-    // 5) PI (negative feedback)
-    g_gpsDoCtrl.integ += phaseErrUsed;
-    const double integMax = 200e-6;  // keep tight if using *f0 scaling
+    // clamp integrator to sane bounds (scaled as seconds of phase)
+    const double integMax = 200e-6;
     if (g_gpsDoCtrl.integ > integMax)
-    {
         g_gpsDoCtrl.integ = integMax;
-    }
     if (g_gpsDoCtrl.integ < -integMax)
-    {
         g_gpsDoCtrl.integ = -integMax;
-    }
 
+    // Convert phase errors (s) to Hz corrections by multiplying by f0
     g_gpsDoCtrl.deltaHz
-        = -(g_gpsDoCtrl.Kp * phaseErrUsed * g_gpsDoCtrl.f0 + g_gpsDoCtrl.Ki * g_gpsDoCtrl.integ * g_gpsDoCtrl.f0);
+        = -(g_gpsDoCtrl.Kp * errP_s * g_gpsDoCtrl.f0 + g_gpsDoCtrl.Ki * g_gpsDoCtrl.integ * g_gpsDoCtrl.f0);
 
-    // 6) Hz -> Volts using OCXO Hz/V
+    // 5) Hz -> Volts using OCXO Hz/V
     g_gpsDoCtrl.deltaVolts
         = (g_gpsDoCtrl.ocxoHzPerVolt != 0.0) ? (g_gpsDoCtrl.deltaHz / g_gpsDoCtrl.ocxoHzPerVolt) : 0.0;
 
-    CONSOLE.printf("Delta Hz %f, Delta Volt %f\r\n", g_gpsDoCtrl.deltaHz, g_gpsDoCtrl.deltaVolts);
+    // Diagnostics
+    CONSOLE.printf("Delta Hz %.9f, Delta Volt %.9f\r\n", g_gpsDoCtrl.deltaHz, g_gpsDoCtrl.deltaVolts);
 
-    // 7) Slew limit in volts clamping
+    // 6) Slew limit (volts/second equivalent per update)
     if (g_gpsDoCtrl.deltaVolts > g_gpsDoCtrl.slewVoltsMax)
-    {
         g_gpsDoCtrl.deltaVolts = g_gpsDoCtrl.slewVoltsMax;
-    }
     if (g_gpsDoCtrl.deltaVolts < -g_gpsDoCtrl.slewVoltsMax)
-    {
         g_gpsDoCtrl.deltaVolts = -g_gpsDoCtrl.slewVoltsMax;
-    }
 
-    // 8) Update target voltage and clamp to range
+    // 7) Update target voltage and clamp to range + light anti-windup on rail hit
     double newV = g_gpsDoCtrl.targetVoltage + g_gpsDoCtrl.deltaVolts;
     if (newV < g_gpsDoCtrl.vMin)
     {
         newV = g_gpsDoCtrl.vMin;
-        g_gpsDoCtrl.integ *= 0.9;  // light anti-windup
+        g_gpsDoCtrl.integ *= 0.9;
     }
     else if (newV > g_gpsDoCtrl.vMax)
     {
@@ -620,51 +638,69 @@ void handleOscTuning(uint32_t count, bool haveQerr, float qErr_ns)
     }
     g_gpsDoCtrl.targetVoltage = newV;
 
-    // 9) Push to DAC
-    int targetVoltageRaw = _getDacVal(g_gpsDoCtrl.targetVoltage);
+    // 8) Push to DAC
+    const int targetVoltageRaw = _getDacVal(g_gpsDoCtrl.targetVoltage);
     g_clkDac.setValue(targetVoltageRaw);
 
-    // 10) Lock Metric
+    // More diagnostics: break out P/I contributions in Hz
+    const double pHz = -(g_gpsDoCtrl.Kp * errP_s * g_gpsDoCtrl.f0);
+    const double iHz = -(g_gpsDoCtrl.Ki * g_gpsDoCtrl.integ * g_gpsDoCtrl.f0);
 
-    static uint8_t goodCycles     = 0;
-    const double   enter_ns       = 50.0;
-    const double   exit_ns        = 150.0;
-    const int      requiredCycles = 10;
-
-    double phase_ns = (dCycles / g_gpsDoCtrl.f0) * 1e9;
-
-    if (fabs(phase_ns) < enter_ns)
-    {
-        if (goodCycles < requiredCycles)
-        {
-            goodCycles++;
-        }
-    }
-    else if (fabs(phase_ns) > exit_ns)
-    {
-        if (goodCycles > 0)
-        {
-            goodCycles--;
-        }
-    }
-
-    // “locked” if mostly good in the window
-    g_gpsDoCtrl.locked = (goodCycles >= (requiredCycles - 1));
-
-    CONSOLE.printf("Voltage set %f phaseError_s %.10f locked %i\r\n",
-                   g_gpsDoCtrl.targetVoltage,
-                   g_gpsDoCtrl.phaseErr_s,
-                   g_gpsDoCtrl.locked);
-
-    double pHz = -(g_gpsDoCtrl.Kp * g_gpsDoCtrl.phaseErr_s * g_gpsDoCtrl.f0);
-    double iHz = -(g_gpsDoCtrl.Ki * g_gpsDoCtrl.integ * g_gpsDoCtrl.f0);
-
-    CONSOLE.printf("dCycles=%.6f phase=%.1f ns  P=%.3f Hz  I=%.3f Hz  dHz=%.3f Hz\r\n",
+    CONSOLE.printf("count=%i, dCycles_raw=%lli dCycles=%.6f phaseErr=%.2f ns  P=%.6f Hz  I=%.6f Hz  dHz=%.6f Hz\r\n",
+                   count,
+                   (long long)dCycles_raw,
                    dCycles,
                    g_gpsDoCtrl.phaseErr_s * 1e9,
                    pHz,
                    iHz,
                    g_gpsDoCtrl.deltaHz);
+}
+
+static void _handleLockLogic()
+{
+    const uint32_t exit_ns         = 150;
+    static double  lastPhaseErr_ns = 0.0;
+
+    double phaseErr_ns = g_gpsDoCtrl.phaseErr_s * 1e9;
+
+    // verify we're getting regular PPS and a clock reading
+    if(((millis() - g_tLastpps_ms) > 1100) && g_clkRxErr)
+    {
+        //we should have gotten a pps by now, lock fail
+        g_gpsDoCtrl.locked     = 0;
+        g_gpsDoCtrl.goodCycles = 0;
+        return;
+    }
+
+    if(phaseErr_ns == lastPhaseErr_ns)
+    {
+        // we've not calculated a new error so do nothing (no pps yet)
+        return;
+    }
+
+    lastPhaseErr_ns = phaseErr_ns;
+
+    if (fabs(phaseErr_ns) < k_requiredPhaseErr_ns)
+    {
+        if (g_gpsDoCtrl.goodCycles < k_requiredGoodCyclesLock)
+        {
+            g_gpsDoCtrl.goodCycles++;
+        }
+    }
+    else if (fabs(phaseErr_ns) > exit_ns)
+    {
+        if (g_gpsDoCtrl.goodCycles > 0)
+        {
+            g_gpsDoCtrl.goodCycles--;
+        }
+    }
+
+    g_gpsDoCtrl.locked = (g_gpsDoCtrl.goodCycles >= (k_requiredGoodCyclesLock - 1));
+
+    CONSOLE.printf("Voltage set %f phaseError_s %.10f locked %i\r\n",
+                   g_gpsDoCtrl.targetVoltage,
+                   g_gpsDoCtrl.phaseErr_s,
+                   g_gpsDoCtrl.locked);
 }
 
 static void _handleLeds()
@@ -702,26 +738,35 @@ static void _handleLeds()
 }
 
 // ====== Main Loop  ======
+
 void loop()
 {
-    uint32_t clkCount = _handlePps();
-    
-    if(clkCount  != 0)
+    int32_t clkCount = _handlePps();
+
+    if (clkCount > 0)
     {
         g_tuningCycle = true;
+        g_clkRxErr    = false;
+    }
+    else if (clkCount == -1)
+    {
+        g_clkRxErr = true;
     }
 
     _handleLeds();
     
     _handleGnss();
+    
+    _handleConsole();
 
     if (g_tuningCycle)
     {
-        handleOscTuning(clkCount, g_gpsMsgs.haveTimTp, g_gpsMsgs.timTp.qErrNs);
+        _handleOscTuning(clkCount);
         g_gpsMsgs.haveTimTp = false;
     }
 
-    _handleConsole();
+    _handleLockLogic();
 
     g_tuningCycle = false;
+
 }

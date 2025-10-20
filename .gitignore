@@ -4,3 +4,8 @@
 .vscode/launch.json
 .vscode/ipch
 .vscode
+board/teensyGpsDoV2/*backups
+board/teensyGpsDoV2/~*
+board/teensyGpsDoV2/#*
+board/teensyGpsDoV2/_autosave*
+board/teensyGpsDoV2/fp-info-cache

@@ -42,6 +42,7 @@ uint8_t ExtIntFreqCountClass::available(void)
 uint32_t ExtIntFreqCountClass::read(void)
 {
   count_ready = 0;
+  
   return count_output;
 }
 
