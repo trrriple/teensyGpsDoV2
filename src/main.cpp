@@ -12,6 +12,7 @@ static const uint32_t k_surveyInMinDurSec      = 600;
 static const uint32_t k_surveyInVarLimit       = 900000;
 static const uint32_t k_requiredGoodCyclesLock = 10;
 static const uint32_t k_requiredPhaseErr_ns    = 2;
+static const uint16_t k_tenMhzAvgWindowSec     = 600;
 
 // ----- State -----
 static bool     g_svinSubscribed  = false;
@@ -49,18 +50,29 @@ static int     g_gsvTotal    = 0;
 static bool    g_gsvComplete = false;
 
 // ========= Pinout ==============
-#define GNSS_SERIAL Serial5
-#define CONSOLE Serial
+// 10 MHz is on PIN 19
+// 1 PPS is on PIN 18
 
+#define GNSS_SERIAL    Serial5
+#define CONSOLE        Serial
 #define LOCKED_LED_PIN 15
-#define PPS_LED_PIN 14
+#define PPS_LED_PIN    14
 
 // ======== 10 MHz Tuning DAC =========
-#define DAC_VREF 3.3f
+#define DAC_VREF   3.3f
 #define DAC_COUNTS 65536U
 #define DAC_CS_PIN 10
-static const float k_dacZeroVal  = DAC_VREF / 2.0f;
-static const float k_dacLsb      = DAC_VREF / DAC_COUNTS;
+static const float k_dacZeroVal = DAC_VREF / 2.0f;
+static const float k_dacLsb     = DAC_VREF / DAC_COUNTS;
+
+struct TenMhzAvgState
+{
+    uint32_t    buf[k_tenMhzAvgWindowSec];
+    uint16_t    n     = 0;     // valid entries (<= window)
+    uint16_t    idx   = 0;     // next write index
+    uint64_t    sum   = 0;     // sum of counts
+    long double sumsq = 0.0L;  // sum of squares
+};
 
 struct GpsdoCtrl
 {
@@ -70,6 +82,13 @@ struct GpsdoCtrl
     double vMax          = DAC_VREF;    // clamps for DAC output voltage (defaults 0..vref)
     double slewVoltsMax  = 0.010;       // max change per second (V)
     double f0            = 10000000.0;  // Expected Frequency
+
+    // ---- Slow FLL + hold/tunnel parameters ----
+    uint32_t fllUpdateSec = 120;   // run slow FLL every N seconds
+    double   fllPpbThresh = 3.0;   // ignore avg errors inside ±3 ppb
+    double   fllGain      = 0.30;  // fraction of suggested trim to apply per run
+    double   holdPpb      = 1.0;   // if |avgErrPpb| ≤ 1 ppb and PPS good, hold PI
+    double   qerrNsHold   = 20.0;  // PPS quality threshold for hold (ns)
 
     // Gains
     double Kp = 0.1;
@@ -85,24 +104,36 @@ struct GpsdoCtrl
     bool     locked        = false;
 
     // Metrics
-    double   deltaHz;
-    double   deltaVolts;
-    double   pHz; // P contribution to PI
-    double   iHz; // I contribution to PI
+    double deltaHz    = NAN;
+    double deltaVolts = NAN;
+    double pHz        = NAN;  // P contribution to PI
+    double iHz        = NAN;  // I contribution to PI
+    bool   inHold     = false;
+    bool   haveAvg    = false;
+    bool   goodPps    = false;
+
+    // 10 MHz frequency averaging (rolling window, 1 sample = 1 s gate)
+    TenMhzAvgState avgState;
+    double         avgHz     = NAN;  // mean of recent 10 MHz frequency estimates
+    double         rmsHz     = NAN;  // RMS (sample stddev) over window
+    double         avgErrPpb = NAN;  // (avgHz - f0)/f0 * 1e9
+    uint16_t       avgNSamp  = 0;    // how many samples currently in the window
 };
 
 GpsdoCtrl g_gpsDoCtrl;
 
-// ============== DAC ====================
+// ============== DAC Object ====================
 DAC8550 g_clkDac(DAC_CS_PIN);
+
+// ============== Timer (Counter) Functions ====================
 
 static uint32_t _readCountRaw()
 {
     static uint32_t countPrev = 0;
 
-    IMXRT_TMR_t *TMRx = &IMXRT_TMR3;
+    IMXRT_TMR_t* TMRx = &IMXRT_TMR3;
 
-    uint32_t count = TMRx->CH[1].CNTR  | (TMRx->CH[2].HOLD << 16); // atomic
+    uint32_t count = TMRx->CH[1].CNTR | (TMRx->CH[2].HOLD << 16);  // atomic
 
     uint32_t countOutput = count - countPrev;
     countPrev            = count;
@@ -114,11 +145,10 @@ static bool _poll10MHzCount(uint32_t* out_capt)
 {
     static uint32_t countPrev = 0;
 
-
     IMXRT_TMR_t* TMRx = &IMXRT_TMR3;
 
     if ((TMRx->CH[0].SCTRL & TMR_SCTRL_IEF) && (TMRx->CH[2].SCTRL & TMR_SCTRL_IEF))
-    {                                        
+    {
         uint32_t count = TMRx->CH[0].CAPT | (TMRx->CH[2].CAPT << 16);
         TMRx->CH[0].SCTRL &= ~TMR_SCTRL_IEF;
         TMRx->CH[2].SCTRL &= ~TMR_SCTRL_IEF;
@@ -142,15 +172,15 @@ static void _counterInit(void)
     IOMUXC_SW_MUX_CTL_PAD_GPIO_AD_B1_00 = 0b10001;  // QT3 TIMER0 on pin 19
     IOMUXC_QTIMER3_TIMER0_SELECT_INPUT  = 0b01;
 
-    IOMUXC_SW_MUX_CTL_PAD_GPIO_AD_B1_01 = 0b10001;   // QT3 TIMER1 on pin 18
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_AD_B1_01 = 0b10001;  // QT3 TIMER1 on pin 18
     IOMUXC_QTIMER3_TIMER1_SELECT_INPUT  = 0b00;
 
-    IMXRT_TMR_t *TMRx = &IMXRT_TMR3;
+    IMXRT_TMR_t* TMRx = &IMXRT_TMR3;
 
     // ---------------- CH0: 10 MHz low word ----------------
-    TMRx->CH[0].CTRL   = 0;          // stop
+    TMRx->CH[0].CTRL   = 0;  // stop
     TMRx->CH[0].CNTR   = 0;
-    TMRx->CH[0].LOAD   = 0;          // reload value after trigger
+    TMRx->CH[0].LOAD   = 0;  // reload value after trigger
     TMRx->CH[0].COMP1  = 0xFFFF;
     TMRx->CH[0].CMPLD1 = 0xFFFF;
     TMRx->CH[0].SCTRL  = TMR_SCTRL_CAPTURE_MODE(1);
@@ -167,30 +197,107 @@ static void _counterInit(void)
     TMRx->CH[2].FILT   = 0;
     TMRx->CH[2].CSCTRL = 0;
 
-    // Configure Channel 1 which isn't used, but for some reason without this block 
+    // Configure Channel 1 which isn't used, but for some reason without this block
     // Pin 18 was not able to accept a clock (the voltage was getting pulled down)
-    // We're using Channel 1's external input as our secondary clock source for capturing 
+    // We're using Channel 1's external input as our secondary clock source for capturing
     // pulse count via PPS
-    TMRx->CH[1].CTRL   = 0;          // stop
+    TMRx->CH[1].CTRL   = 0;  // stop
     TMRx->CH[1].CNTR   = 0;
-    TMRx->CH[1].LOAD   = 0;          // reload value after trigger
+    TMRx->CH[1].LOAD   = 0;  // reload value after trigger
     TMRx->CH[1].COMP1  = 0xFFFF;
     TMRx->CH[1].CMPLD1 = 0xFFFF;
     TMRx->CH[1].SCTRL  = 0;
     TMRx->CH[1].FILT   = 0;
     TMRx->CH[1].CSCTRL = 0;
 
-
-    // Start timer 0 to count 10 MHz on pin 19 (PCS(0) using pin 18 (PCS(1)) to capture 
+    // Start timer 0 to count 10 MHz on pin 19 (PCS(0) using pin 18 (PCS(1)) to capture
     // current value
     TMRx->CH[0].CTRL = TMR_CTRL_CM(1) | TMR_CTRL_PCS(0b0000) | TMR_CTRL_SCS(0b01) | TMR_CTRL_LENGTH;
 
     // Enable ripple into counter channel 2 so we have 32 bits
     TMRx->CH[2].CTRL = TMR_CTRL_CM(7) | TMR_CTRL_PCS(0b0100) | TMR_CTRL_SCS(0b01);
-
 }
 
-// ============ Helper functions ==============
+// ============== Osc Averaging Metric ====================
+
+static inline void _tenMhzAvgReset()
+{
+    auto& s = g_gpsDoCtrl.avgState;
+    s.n = s.idx = 0;
+    s.sum       = 0;
+    s.sumsq     = 0.0L;
+
+    g_gpsDoCtrl.avgHz     = NAN;
+    g_gpsDoCtrl.rmsHz     = NAN;
+    g_gpsDoCtrl.avgErrPpb = NAN;
+    g_gpsDoCtrl.avgNSamp  = 0;
+}
+
+static inline bool _tenMhzAvgReady()
+{
+    return (g_gpsDoCtrl.avgNSamp >= k_tenMhzAvgWindowSec) && isfinite(g_gpsDoCtrl.avgErrPpb);
+}
+
+static inline void _tenMhzAvgPush(uint32_t countHz)
+{
+    auto& s = g_gpsDoCtrl.avgState;
+
+    if (s.n < k_tenMhzAvgWindowSec)
+    {
+        s.buf[s.idx] = countHz;
+        s.sum += countHz;
+        s.sumsq += (long double)countHz * (long double)countHz;
+        s.idx = (s.idx + 1) % k_tenMhzAvgWindowSec;
+        s.n++;
+    }
+    else
+    {
+        uint32_t old = s.buf[s.idx];
+        s.buf[s.idx] = countHz;
+
+        s.sum += (uint64_t)countHz - (uint64_t)old;
+        s.sumsq += (long double)countHz * (long double)countHz - (long double)old * (long double)old;
+
+        s.idx = (s.idx + 1) % k_tenMhzAvgWindowSec;
+    }
+
+    // ---- Update exported metrics ----
+    g_gpsDoCtrl.avgNSamp = s.n;
+
+    if (s.n > 0)
+    {
+        long double n     = (long double)s.n;
+        long double mu    = (long double)s.sum / n;  // mean (Hz)
+        g_gpsDoCtrl.avgHz = (double)mu;
+
+        if (s.n >= 2)
+        {
+            long double var = (s.sumsq - n * mu * mu) / (n - 1.0L);  // sample variance
+            if (var < 0)
+                var = 0;
+            g_gpsDoCtrl.rmsHz = (double)sqrt((double)var);
+        }
+        else
+        {
+            g_gpsDoCtrl.rmsHz = NAN;
+        }
+
+        if (isfinite(g_gpsDoCtrl.avgHz) && g_gpsDoCtrl.f0 != 0.0)
+        {
+            g_gpsDoCtrl.avgErrPpb = (g_gpsDoCtrl.avgHz - g_gpsDoCtrl.f0) / g_gpsDoCtrl.f0 * 1e9;
+        }
+        else
+        {
+            g_gpsDoCtrl.avgErrPpb = NAN;
+        }
+    }
+    else
+    {
+        g_gpsDoCtrl.avgHz = g_gpsDoCtrl.rmsHz = g_gpsDoCtrl.avgErrPpb = NAN;
+    }
+}
+
+// ============== GPS Helper Functions ====================
 static void _gsvReset()
 {
     g_gsvCount    = 0;
@@ -220,34 +327,18 @@ static void _gsvIngest(const NmeaGsv& part)
     }
 }
 
+// ============== DAC Helper Functions ====================
+
 static int _getDacVal(float desiredV)
 {
     return (desiredV - k_dacZeroVal) / k_dacLsb;
 }
 
-static double _mm2ToMSigma(uint32_t mm2)
-{
-    // stddev [m] from variance [mm^2]
-    double mm = sqrt((double)mm2);
-    return mm / 1000.0;
-}
+// =====================================================================================================================
+// Main Process Code
+// =====================================================================================================================
 
-// ====== Pretty helpers ======
-static void _printUtcFromHhmmss(double hhmmss)
-{
-    if (!(hhmmss > 0.0))
-    {
-        CONSOLE.print("--:--:--");
-        return;
-    }
-    int    hh = (int)(hhmmss / 10000.0);
-    int    mm = (int)((hhmmss - hh * 10000.0) / 100.0);
-    double ss = hhmmss - hh * 10000.0 - mm * 100.0;
-    CONSOLE.printf("%02d:%02d:%06.3f", hh, mm, ss);
-}
-
-
-// ====== Main Setup  ======
+// ============== Main Setup ====================
 void setup()
 {
     CONSOLE.begin(115200);
@@ -261,8 +352,6 @@ void setup()
 
     pinMode(LOCKED_LED_PIN, OUTPUT);
     digitalWrite(LOCKED_LED_PIN, LOW);
-
-
 
     GNSS_SERIAL.begin(9600);
     gnssInit(&GNSS_SERIAL, NULL);
@@ -299,6 +388,8 @@ void setup()
 
     _counterInit();
 }
+
+// ============== Handlers ====================
 
 static void _handleGnss()
 {
@@ -468,6 +559,20 @@ static void _handleGnss()
     }
 }
 
+// ====== Print helper ======
+static void _printUtcFromHhmmss(double hhmmss)
+{
+    if (!(hhmmss > 0.0))
+    {
+        CONSOLE.print("--:--:--");
+        return;
+    }
+    int    hh = (int)(hhmmss / 10000.0);
+    int    mm = (int)((hhmmss - hh * 10000.0) / 100.0);
+    double ss = hhmmss - hh * 10000.0 - mm * 100.0;
+    CONSOLE.printf("%02d:%02d:%06.3f", hh, mm, ss);
+}
+
 static void _handleConsole()
 {
     // Once per second, print a compact status line
@@ -623,18 +728,25 @@ static void _handleConsole()
         }
 
         // =================== OSC Tuning ================
-        CONSOLE.printf(
-            "[OSC] count=%i dCycles=%.6f phaseErr=%.2f ns  P=%.6f Hz  I=%.6f Hz \r\n",
-            g_gpsDoCtrl.tenMhzCount,
-            g_gpsDoCtrl.dCycles,
-            g_gpsDoCtrl.phaseErr_s * 1e9,
-            g_gpsDoCtrl.pHz,
-            g_gpsDoCtrl.iHz);
+        CONSOLE.printf("[OSC] freq=%.6f MHz dCycles=%.6f phaseErr=%.2f ns  P=%.6f Hz  I=%.6f Hz \r\n",
+                       (double)g_gpsDoCtrl.tenMhzCount / 1e6,
+                       g_gpsDoCtrl.dCycles,
+                       g_gpsDoCtrl.phaseErr_s * 1e9,
+                       g_gpsDoCtrl.pHz,
+                       g_gpsDoCtrl.iHz);
 
         CONSOLE.printf("[OSC] Tuning: deltaHz=%.9f deltaVolts=%.9f targetVoltage=%.6f\r\n",
                        g_gpsDoCtrl.deltaHz,
                        g_gpsDoCtrl.deltaVolts,
                        g_gpsDoCtrl.targetVoltage);
+
+        CONSOLE.printf("[OSC] Locked=%i, inHold=%i\r\n", g_gpsDoCtrl.locked, g_gpsDoCtrl.inHold);
+
+        CONSOLE.printf("[OSC] avg=%.6f Hz  rms=%.6f Hz  err=%.3f ppb%s\r\n",
+                       g_gpsDoCtrl.avgHz,
+                       g_gpsDoCtrl.rmsHz,
+                       g_gpsDoCtrl.avgErrPpb,
+                       _tenMhzAvgReady() ? "" : " (warming up)");
     }
 }
 
@@ -657,22 +769,21 @@ static void _handlePps()
         {
             CONSOLE.printf("Warning, Clk count significantly out of range: %i\r\n", tenMhzCount);
             g_gpsDoCtrl.tenMhzCount = 0;
-            g_clkRxErr = true;
-
+            g_clkRxErr              = true;
         }
         else
         {
             g_gpsDoCtrl.tenMhzCount = tenMhzCount;
             g_tuningCycle           = true;
             g_clkRxErr              = false;
+            _tenMhzAvgPush(tenMhzCount);
         }
     }
 }
 
 void _handleOscTuning()
 {
-
-    if(!g_tuningCycle)
+    if (!g_tuningCycle)
     {
         return;
     }
@@ -684,23 +795,12 @@ void _handleOscTuning()
     // Reset qErr data to validate next time
     g_gpsMsgs.haveTimTp = false;
 
-    // 1) Signed cycle error
+    // 1) Signed cycle error (integer cycles over 1 s gate) with fractional correction from qErr
     const int64_t dCycles_raw = (int64_t)g_gpsDoCtrl.tenMhzCount - (int64_t)g_gpsDoCtrl.f0;
-
-    // Base: subtract fractional cycle from qErr if we have it
-    g_gpsDoCtrl.dCycles = (double)dCycles_raw - (haveQerr ? (double)qErr_ns * 0.01 : 0.0);
-
-    // Detect the ±1-cycle "quantization flip": counter toggles -1/+0 with small ns error.
-    const bool oneCycleFlip = (llabs(dCycles_raw) == 1) && haveQerr && (fabs(qErr_ns) <= 8.0);
-
-    // If it's the quantization flip, keep only the fine ns error (signed), drop integer part
-    if (oneCycleFlip)
-    {
-        g_gpsDoCtrl.dCycles  = -(double)qErr_ns * 0.01;  // a few hundredths of a cycle → a few ns
-    }
+    g_gpsDoCtrl.dCycles       = (double)dCycles_raw - (haveQerr ? (double)qErr_ns * 0.01 : 0.0);
 
     // 2) Phase error in seconds
-    g_gpsDoCtrl.phaseErr_s = g_gpsDoCtrl.dCycles  / g_gpsDoCtrl.f0;
+    g_gpsDoCtrl.phaseErr_s = g_gpsDoCtrl.dCycles / g_gpsDoCtrl.f0;
 
     // 3) Deadband: apply to P only; I integrates full error (so it can "walk" across boundary)
     //    Exempt the ±1-cycle flip case from deadband entirely so P sees the small ns error.
@@ -708,24 +808,28 @@ void _handleOscTuning()
     const double err_s      = g_gpsDoCtrl.phaseErr_s;
 
     double errP_s = err_s;  // error seen by the proportional path
-    if (!oneCycleFlip)
+
+    const double aerr = fabs(err_s);
+    if (aerr > deadband_s)
     {
-        const double aerr = fabs(err_s);
-        if (aerr > deadband_s)
-        {
-            // use only the amount beyond the deadband
-            errP_s = copysign(aerr - deadband_s, err_s);
-        }
-        else
-        {
-            // inside deadband: mute P, but keep I integrating
-            errP_s = 0.0;
-            g_gpsDoCtrl.integ *= 0.999;  // gentle bleed (was 0.995)
-        }
+        // use only the amount beyond the deadband
+        errP_s = copysign(aerr - deadband_s, err_s);
+    }
+    else
+    {
+        // inside deadband: mute P, but keep I integrating
+        errP_s = 0.0;
+        g_gpsDoCtrl.integ *= 0.999;  // gentle bleed
     }
 
+    // ---- HOLD / TUNNEL (mute P when we're "good enough" on averaged freq and PPS quality ok) ----
+    g_gpsDoCtrl.haveAvg = _tenMhzAvgReady();
+    g_gpsDoCtrl.goodPps = haveQerr && (fabs((double)qErr_ns) <= g_gpsDoCtrl.qerrNsHold);
+    g_gpsDoCtrl.inHold
+        = g_gpsDoCtrl.haveAvg && g_gpsDoCtrl.goodPps && (fabs(g_gpsDoCtrl.avgErrPpb) <= g_gpsDoCtrl.holdPpb);
+
     // 4) PI (negative feedback)
-    //    KEY FIX: update the integrator each cycle using full error (not deadbanded)
+    //    KEY: update the integrator each cycle using full error (not deadbanded)
     g_gpsDoCtrl.integ += err_s;
 
     // clamp integrator to sane bounds (scaled as seconds of phase)
@@ -735,26 +839,64 @@ void _handleOscTuning()
     if (g_gpsDoCtrl.integ < -integMax)
         g_gpsDoCtrl.integ = -integMax;
 
+    // Convert phase errors (s) to Hz corrections by multiplying by f0
+    const double effErrP_s = g_gpsDoCtrl.inHold ? 0.0 : errP_s;  // hold mutes P; I still active (with bleed above)
+    g_gpsDoCtrl.pHz        = -(g_gpsDoCtrl.Kp * effErrP_s * g_gpsDoCtrl.f0);
+    g_gpsDoCtrl.iHz        = -(g_gpsDoCtrl.Ki * g_gpsDoCtrl.integ * g_gpsDoCtrl.f0);
 
-        // Convert phase errors (s) to Hz corrections by multiplying by f0
-    g_gpsDoCtrl.pHz = -(g_gpsDoCtrl.Kp * errP_s * g_gpsDoCtrl.f0);
-    g_gpsDoCtrl.iHz = -(g_gpsDoCtrl.Ki * g_gpsDoCtrl.integ * g_gpsDoCtrl.f0);
-    
-    g_gpsDoCtrl.deltaHz = g_gpsDoCtrl.pHz - g_gpsDoCtrl.iHz;
-        // = -(g_gpsDoCtrl.Kp * errP_s * g_gpsDoCtrl.f0 + g_gpsDoCtrl.Ki * g_gpsDoCtrl.integ * g_gpsDoCtrl.f0);
+    // deltaHz should equal: -(Kp*errP_s*f0 + Ki*integ*f0)
+    g_gpsDoCtrl.deltaHz = g_gpsDoCtrl.pHz + g_gpsDoCtrl.iHz;
 
     // 5) Hz -> Volts using OCXO Hz/V
     g_gpsDoCtrl.deltaVolts
         = (g_gpsDoCtrl.ocxoHzPerVolt != 0.0) ? (g_gpsDoCtrl.deltaHz / g_gpsDoCtrl.ocxoHzPerVolt) : 0.0;
 
-    // 6) Slew limit (volts/second equivalent per update)
-    if (g_gpsDoCtrl.deltaVolts > g_gpsDoCtrl.slewVoltsMax)
-        g_gpsDoCtrl.deltaVolts = g_gpsDoCtrl.slewVoltsMax;
-    if (g_gpsDoCtrl.deltaVolts < -g_gpsDoCtrl.slewVoltsMax)
-        g_gpsDoCtrl.deltaVolts = -g_gpsDoCtrl.slewVoltsMax;
+    // ------------- SLOW FLL (outer loop)  -------------
+    // Occasionally apply a gentle trim based on the windowed average (better SNR than 1 s)
+    static uint32_t _tLastFll_ms = 0;
+    double          dvFll        = 0.0;
+
+    const uint32_t now_ms = millis();
+    if ((now_ms - _tLastFll_ms) >= g_gpsDoCtrl.fllUpdateSec * 1000u)
+    {
+        _tLastFll_ms = now_ms;
+
+        if (g_gpsDoCtrl.avgNSamp >= k_tenMhzAvgWindowSec && isfinite(g_gpsDoCtrl.avgHz)
+            && (g_gpsDoCtrl.ocxoHzPerVolt != 0.0))
+        {
+            const double avgErrHz = g_gpsDoCtrl.avgHz - g_gpsDoCtrl.f0;
+            const double ppb      = (avgErrHz / g_gpsDoCtrl.f0) * 1e9;
+
+            if (fabs(ppb) >= g_gpsDoCtrl.fllPpbThresh)
+            {
+                // Suggest a voltage trim: ΔV = -Δf / (Hz/V), apply fraction fllGain
+                dvFll = -(avgErrHz / g_gpsDoCtrl.ocxoHzPerVolt) * g_gpsDoCtrl.fllGain;
+
+                // Respect your slew limit over the whole FLL period
+                const double maxStep = g_gpsDoCtrl.slewVoltsMax * (double)g_gpsDoCtrl.fllUpdateSec;
+                if (dvFll > maxStep)
+                    dvFll = maxStep;
+                if (dvFll < -maxStep)
+                    dvFll = -maxStep;
+            }
+        }
+    }
+
+    // 6) Combine fast PI step (per-second) with slow FLL step (sporadic) before clamping
+    double deltaVoltsTotal = g_gpsDoCtrl.deltaVolts + dvFll;
+
+    // Per-second instantaneous clamp (keeps behavior consistent with your existing slew envelope)
+    if (deltaVoltsTotal > g_gpsDoCtrl.slewVoltsMax)
+    {
+        deltaVoltsTotal = g_gpsDoCtrl.slewVoltsMax;
+    }
+    if (deltaVoltsTotal < -g_gpsDoCtrl.slewVoltsMax)
+    {
+        deltaVoltsTotal = -g_gpsDoCtrl.slewVoltsMax;
+    }
 
     // 7) Update target voltage and clamp to range + light anti-windup on rail hit
-    double newV = g_gpsDoCtrl.targetVoltage + g_gpsDoCtrl.deltaVolts;
+    double newV = g_gpsDoCtrl.targetVoltage + deltaVoltsTotal;
     if (newV < g_gpsDoCtrl.vMin)
     {
         newV = g_gpsDoCtrl.vMin;
@@ -768,9 +910,8 @@ void _handleOscTuning()
     g_gpsDoCtrl.targetVoltage = newV;
 
     // 8) Push to DAC
-    int targetVoltageRaw = _getDacVal(g_gpsDoCtrl.targetVoltage);
+    const int targetVoltageRaw = _getDacVal(g_gpsDoCtrl.targetVoltage);
     g_clkDac.setValue(targetVoltageRaw);
-
 }
 
 static void _handleLockLogic()
@@ -781,15 +922,15 @@ static void _handleLockLogic()
     double phaseErr_ns = g_gpsDoCtrl.phaseErr_s * 1e9;
 
     // verify we're getting regular PPS and a clock reading
-    if(((millis() - g_tLastpps_ms) > 1100) && g_clkRxErr)
+    if (((millis() - g_tLastpps_ms) > 1100) && g_clkRxErr)
     {
-        //we should have gotten a pps by now, lock fail
+        // we should have gotten a pps by now, lock fail
         g_gpsDoCtrl.locked     = 0;
         g_gpsDoCtrl.goodCycles = 0;
         return;
     }
 
-    if(phaseErr_ns == lastPhaseErr_ns)
+    if (phaseErr_ns == lastPhaseErr_ns)
     {
         // we've not calculated a new error so do nothing (no pps yet)
         return;
@@ -849,7 +990,6 @@ static void _handleLeds()
     }
 }
 
-
 // ====== Main Loop  ======
 
 void loop()
@@ -857,9 +997,9 @@ void loop()
     _handlePps();
 
     _handleLeds();
-    
+
     _handleGnss();
-    
+
     _handleConsole();
 
     _handleOscTuning();
@@ -867,5 +1007,4 @@ void loop()
     _handleLockLogic();
 
     g_tuningCycle = false;
-
 }

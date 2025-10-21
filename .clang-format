@@ -7,6 +7,7 @@ PointerAlignment: Left
 AlignConsecutiveAssignments: Consecutive
 AlignConsecutiveDeclarations: true
 AlignOperands: true
+AlignConsecutiveMacros: Consecutive
 
 BreakBeforeBraces: Allman
 BraceWrapping:
