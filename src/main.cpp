@@ -117,11 +117,11 @@ struct GpsdoCtrl
     double Ki = 0.0005;
 
     // Internals
-    uint32_t tenMhzCount_hz = 0;    // 1 s gate → Hz
-    double   phaseErr_s     = 0.0;  // seconds
+    uint32_t tenMhzCount_hz = 0;     // 1 s gate → Hz
+    double   phaseErr_s     = 0.0;   // seconds
     double   dCycles        = 0.0;
     double   integ          = 0.0;   // seconds (phase integrator)
-    double   target_v       = 1.80;  // V
+    double   target_v       = 2.0;   // V
     uint8_t  goodCycles     = 0;
     bool     locked         = false;
 
