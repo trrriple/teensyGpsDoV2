@@ -895,81 +895,101 @@ static void _handlePps()
 // =====================================================================================================================
 void _handleOscTuning()
 {
-    if (!g_tuningCycle)
+    if (!g_tuningCycle || g_clkRxErr)
     {
         return;
-    }
 
-    // Inputs from GPS timepulse quality
+    }
+    // Measure elapsed time since last PPS to stabilize slew behavior
+    static uint32_t s_lastPps_ms = 0;
+    const uint32_t  now_ms       = millis();
+    const double    dt_s         = (s_lastPps_ms == 0) ? 1.0 : (double)(now_ms - s_lastPps_ms) / 1000.0;
+    s_lastPps_ms                 = now_ms;
+
+    // ---- PPS quality (UBX TIM-TP) ----
     const bool  haveQerr = g_gpsMsgs.haveTimTp;
     const float qErr_ns  = g_gpsMsgs.timTp.qErrNs;
-
-    // Reset qErr data to validate next time
-    g_gpsMsgs.haveTimTp = false;
+    g_gpsMsgs.haveTimTp  = false;  // consume
 
     // 1) Signed cycle error (integer cycles over 1 s gate) with fractional correction from qErr
     const int64_t dCycles_raw = (int64_t)g_gpsDoCtrl.tenMhzCount_hz - (int64_t)g_gpsDoCtrl.f0_hz;
-    g_gpsDoCtrl.dCycles       = (double)dCycles_raw - (haveQerr ? (double)qErr_ns * 0.01 : 0.0);
+    const double  fracCycles  = haveQerr ? (double)qErr_ns * 0.01 /* 1 cycle / 100 ns at 10 MHz */ : 0.0;
 
-    // add in the frequency with qerr factored in
-    _tenMhzAvgPush(g_gpsDoCtrl.f0_hz + g_gpsDoCtrl.dCycles);
+    g_gpsDoCtrl.dCycles = (double)dCycles_raw - fracCycles;
+
+    // 1a) Feed the averaging window **only when PPS is good**
+    //     This keeps bad PPS epochs from polluting the long-term average.
+    const bool ppsGoodForAvg = haveQerr && (fabs((double)qErr_ns) <= g_gpsDoCtrl.qerrHold_ns);
+    if (ppsGoodForAvg)
+    {
+        const double est_hz = g_gpsDoCtrl.f0_hz + g_gpsDoCtrl.dCycles;  // includes fractional cycle via qErr
+        _tenMhzAvgPush(est_hz);
+    }
 
     // 2) Phase error in seconds
     g_gpsDoCtrl.phaseErr_s = g_gpsDoCtrl.dCycles / g_gpsDoCtrl.f0_hz;
 
-    // 3) Deadband: apply to P only; I integrates full error (so it can "walk" across boundary)
-    //    Exempt the ±1-cycle flip case from deadband entirely so P sees the small ns error.
-    const double deadband_s = 2e-9;  // seconds
+    // 3) Deadband (P-path only) with ±1-cycle flip exemption
+    const double deadband_s = 2e-9;  // 2 ns
     const double err_s      = g_gpsDoCtrl.phaseErr_s;
 
-    double errP_s = err_s;  // error seen by the proportional path
+    double errP_s = err_s;
 
-    const double aerr = fabs(err_s);
-    if (aerr > deadband_s)
-    {
-        // use only the amount beyond the deadband
-        errP_s = copysign(aerr - deadband_s, err_s);
-    }
-    else
-    {
-        // inside deadband: mute P, but keep I integrating
-        errP_s = 0.0;
-        g_gpsDoCtrl.integ *= 0.999;  // gentle bleed
-    }
+    const double aerr           = fabs(err_s);
+    const bool   isOneCycleFlip = (llabs(dCycles_raw) == 1);  // exact ±1 cycle in the gate
 
-    // ---- HOLD / TUNNEL (mute P when we're "good enough" on averaged freq and PPS quality ok) ----
+    if (!isOneCycleFlip)
+    {
+        if (aerr > deadband_s)
+            errP_s = copysign(aerr - deadband_s, err_s);
+        else
+        {
+            errP_s = 0.0;                // mute P inside deadband
+            g_gpsDoCtrl.integ *= 0.999;  // gentle bleed
+        }
+    }
+    // else: bypass deadband entirely so P sees the small ns error near the boundary
+
+    // ---- HOLD / TUNNEL ----
     g_gpsDoCtrl.haveAvg = _tenMhzAvgReady();
-    g_gpsDoCtrl.goodPps = haveQerr && (fabs((double)qErr_ns) <= g_gpsDoCtrl.qerrHold_ns);
+    g_gpsDoCtrl.goodPps = ppsGoodForAvg;  // same quality gate as above
     g_gpsDoCtrl.inHold
         = g_gpsDoCtrl.haveAvg && g_gpsDoCtrl.goodPps && (fabs(g_gpsDoCtrl.avgErr_ppb) <= g_gpsDoCtrl.hold_ppb);
 
-    // 4) PI (negative feedback) — update integrator with full error
-    g_gpsDoCtrl.integ += err_s;
+    // 4) PI — update integrator (optionally scale by dt)
+    g_gpsDoCtrl.integ += err_s * dt_s;
 
-    // clamp integrator to sane bounds (scaled as seconds of phase)
-    const double integMax_s = 200e-6;  // seconds
+    // Optional: in hold, apply a slightly stronger leak to keep I from creeping.
+    if (g_gpsDoCtrl.inHold)
+    {
+        g_gpsDoCtrl.integ *= 0.9995;  // tweak or comment this line to keep original behavior
+    }
+
+    // clamp integrator (units = seconds of phase)
+    const double integMax_s = 200e-6;
     if (g_gpsDoCtrl.integ > integMax_s)
+    {
         g_gpsDoCtrl.integ = integMax_s;
+    }
     if (g_gpsDoCtrl.integ < -integMax_s)
+    {
         g_gpsDoCtrl.integ = -integMax_s;
+    }
 
-    // Convert phase errors (s) to Hz corrections by multiplying by f0
-    const double effErrP_s = g_gpsDoCtrl.inHold ? 0.0 : errP_s;  // hold mutes P
+    // Convert phase errors (s) to Hz corrections
+    const double effErrP_s = g_gpsDoCtrl.inHold ? 0.0 : errP_s;  // mute P while in hold
     g_gpsDoCtrl.p_hz       = -(g_gpsDoCtrl.Kp * effErrP_s * g_gpsDoCtrl.f0_hz);
     g_gpsDoCtrl.i_hz       = -(g_gpsDoCtrl.Ki * g_gpsDoCtrl.integ * g_gpsDoCtrl.f0_hz);
 
-    // deltaHz should equal: -(Kp*errP_s*f0 + Ki*integ*f0)
     g_gpsDoCtrl.delta_hz = g_gpsDoCtrl.p_hz + g_gpsDoCtrl.i_hz;
 
-    // 5) Hz -> Volts using OCXO Hz/V
+    // 5) Hz -> V
     g_gpsDoCtrl.delta_v = (g_gpsDoCtrl.ocxo_hz_per_v != 0.0) ? (g_gpsDoCtrl.delta_hz / g_gpsDoCtrl.ocxo_hz_per_v) : 0.0;
 
-    // ------------- SLOW FLL (outer loop)  -------------
-    // Occasionally apply a gentle trim based on the windowed average (better SNR than 1 s)
+    // ------------- SLOW FLL (outer loop) -------------
     static uint32_t _tLastFll_ms = 0;
     double          dvFll_v      = 0.0;
 
-    const uint32_t now_ms = millis();
     if ((now_ms - _tLastFll_ms) >= g_gpsDoCtrl.fllUpdate_s * 1000u)
     {
         _tLastFll_ms = now_ms;
@@ -982,29 +1002,36 @@ void _handleOscTuning()
 
             if (fabs(ppb) >= g_gpsDoCtrl.fllThresh_ppb)
             {
-                // Suggest a voltage trim: ΔV = -Δf / (Hz/V), apply fraction fllGain
                 dvFll_v = -(avgErr_hz / g_gpsDoCtrl.ocxo_hz_per_v) * g_gpsDoCtrl.fllGain;
 
-                // Respect your slew limit over the whole FLL period
+                // Respect slew over the **FLL period** (not per second)
                 const double maxStep_v = g_gpsDoCtrl.slewMax_v_per_s * (double)g_gpsDoCtrl.fllUpdate_s;
                 if (dvFll_v > maxStep_v)
+                {
                     dvFll_v = maxStep_v;
+                }
                 if (dvFll_v < -maxStep_v)
+                {
                     dvFll_v = -maxStep_v;
+                }
             }
         }
     }
 
-    // 6) Combine fast PI step (per-second) with slow FLL step (sporadic) before clamping
+    // 6) Combine PI step with FLL step, then clamp by **per-update** slew
     double deltaVoltsTotal_v = g_gpsDoCtrl.delta_v + dvFll_v;
 
-    // Per-second instantaneous clamp (keeps behavior consistent with your existing slew envelope)
-    if (deltaVoltsTotal_v > g_gpsDoCtrl.slewMax_v_per_s)
-        deltaVoltsTotal_v = g_gpsDoCtrl.slewMax_v_per_s;
-    if (deltaVoltsTotal_v < -g_gpsDoCtrl.slewMax_v_per_s)
-        deltaVoltsTotal_v = -g_gpsDoCtrl.slewMax_v_per_s;
+    const double perUpdateSlew_v = g_gpsDoCtrl.slewMax_v_per_s * (dt_s > 0.0 ? dt_s : 1.0);
+    if (deltaVoltsTotal_v > perUpdateSlew_v)
+    {
+        deltaVoltsTotal_v = perUpdateSlew_v;
+    }
+    if (deltaVoltsTotal_v < -perUpdateSlew_v)
+    {
+        deltaVoltsTotal_v = -perUpdateSlew_v;
+    }
 
-    // 7) Update target voltage and clamp to range + light anti-windup on rail hit
+    // 7) Update target V, clamp to rails, light anti-windup on rail hit
     double new_v = g_gpsDoCtrl.target_v + deltaVoltsTotal_v;
     if (new_v < g_gpsDoCtrl.vMin)
     {
