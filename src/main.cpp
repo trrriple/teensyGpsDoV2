@@ -15,7 +15,8 @@ static const uint32_t k_surveyInMinDur_s       = 600;
 static const uint32_t k_surveyInVarLimit       = 900000;
 static const uint32_t k_requiredGoodCyclesLock = 10;
 static const uint32_t k_requiredPhaseErr_ns    = 2;
-static const uint16_t k_tenMhzAvgWindow_s      = 600;
+static const uint16_t k_tenMhzAvgWindow_s      = 3600;
+static const uint16_t k_tenMhzAvgWindowMin     = 600;
 static const uint32_t k_lcdCyclePeriod_s       = 3;
 
 // =====================================================================================================================
@@ -289,7 +290,7 @@ static inline void _tenMhzAvgReset()
 // =====================================================================================================================
 static inline bool _tenMhzAvgReady()
 {
-    return (g_gpsDoCtrl.avgNSamp >= k_tenMhzAvgWindow_s) && isfinite(g_gpsDoCtrl.avgErr_ppb);
+    return (g_gpsDoCtrl.avgNSamp >= k_tenMhzAvgWindowMin) && isfinite(g_gpsDoCtrl.avgErr_ppb);
 }
 
 // =====================================================================================================================
@@ -994,8 +995,7 @@ void _handleOscTuning()
     {
         _tLastFll_ms = now_ms;
 
-        if (g_gpsDoCtrl.avgNSamp >= k_tenMhzAvgWindow_s && isfinite(g_gpsDoCtrl.avg_hz)
-            && (g_gpsDoCtrl.ocxo_hz_per_v != 0.0))
+        if (_tenMhzAvgReady() && (g_gpsDoCtrl.ocxo_hz_per_v != 0.0))
         {
             const double avgErr_hz = g_gpsDoCtrl.avg_hz - g_gpsDoCtrl.f0_hz;
             const double ppb       = (avgErr_hz / g_gpsDoCtrl.f0_hz) * 1e9;
@@ -1500,11 +1500,11 @@ static void _handleLCD()
         char row1[32];
         if (favg_hz >= 10000000)
         {
-            snprintf(row1, sizeof(row1), "f: %.5f", favg_hz);
+            snprintf(row1, sizeof(row1), "fA: %.4f", favg_hz);
         }
         else
         {
-            snprintf(row1, sizeof(row1), "f:  %.5f", favg_hz);
+            snprintf(row1, sizeof(row1), "fA:  %.4f", favg_hz);
         }
         _lcdPrintRow(1, row1);
     }
