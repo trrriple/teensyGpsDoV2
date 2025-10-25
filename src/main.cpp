@@ -33,20 +33,20 @@ static bool     g_clkRxErr        = false;
 // =====================================================================================================================
 struct GpsMsgs
 {
-    NmeaGga gga;
-    bool    haveGga = false;
+    NmeaGga  gga;
+    uint32_t tLastGga_ms = 0;
 
-    NmeaRmc rmc;
-    bool    haveRmc = false;
+    NmeaRmc  rmc;
+    uint32_t tLastRmc_ms = 0;
 
-    NmeaGsa gsa;
-    bool    haveGsa = false;
+    NmeaGsa  gsa;
+    uint32_t tLastGsa_ms = 0;
 
     UbxTimTp timTp;
-    bool     haveTimTp = false;
+    uint32_t tLastTimTp_ms = 0;
 
     UbxNavTimeUtc timeUtc;
-    bool          haveTimeUtc = false;
+    uint32_t      tLastTimeUtc_ms = 0;
 };
 
 GpsMsgs g_gpsMsgs;
@@ -359,6 +359,16 @@ static inline void _tenMhzAvgPush(double count_hz)
 // =====================================================================================================================
 // GNSS helpers
 // =====================================================================================================================
+static bool _gnssMsgCurrent(uint32_t tMsg_ms)
+{
+    if(millis() - tMsg_ms < 1000)
+    {
+        return true;
+    }
+
+    return false;
+}
+
 
 /* _gsvReset — Reset GSV epoch aggregation state. */
 static void _gsvReset()
@@ -465,7 +475,7 @@ void setup()
 // =====================================================================================================================
 
 /* _handleGnss — Read and decode GNSS streams (NMEA/UBX); update message cache. */
-static void _handleGnss()
+static void _handleGnss(uint32_t tNow_ms)
 {
     // Feed stream
     gnssReadSerial();
@@ -485,8 +495,8 @@ static void _handleGnss()
             NmeaGga gga;
             if (gnssParseGga(line, gga))
             {
-                g_gpsMsgs.gga     = gga;
-                g_gpsMsgs.haveGga = true;
+                g_gpsMsgs.gga         = gga;
+                g_gpsMsgs.tLastGga_ms = tNow_ms;
             }
         }
         else if (t == NmeaType::RMC)
@@ -494,8 +504,8 @@ static void _handleGnss()
             NmeaRmc rmc;
             if (gnssParseRmc(line, rmc))
             {
-                g_gpsMsgs.rmc     = rmc;
-                g_gpsMsgs.haveRmc = true;
+                g_gpsMsgs.rmc         = rmc;
+                g_gpsMsgs.tLastRmc_ms = tNow_ms;
             }
         }
         else if (t == NmeaType::GSA)
@@ -503,8 +513,8 @@ static void _handleGnss()
             NmeaGsa gsa;
             if (gnssParseGsa(line, gsa))
             {
-                g_gpsMsgs.gsa     = gsa;
-                g_gpsMsgs.haveGsa = true;
+                g_gpsMsgs.gsa         = gsa;
+                g_gpsMsgs.tLastGsa_ms = tNow_ms;
             }
         }
         else if (t == NmeaType::GSV)
@@ -605,7 +615,7 @@ static void _handleGnss()
             {
                 if (gnssDecodeTimTp(fr, g_gpsMsgs.timTp))
                 {
-                    g_gpsMsgs.haveTimTp = true;
+                    g_gpsMsgs.tLastTimTp_ms = tNow_ms;
                 }
                 break;
             }
@@ -614,7 +624,7 @@ static void _handleGnss()
             {
                 if (gnssDecodeNavTimeUtc(fr, g_gpsMsgs.timeUtc))
                 {
-                    g_gpsMsgs.haveTimeUtc = true;
+                    g_gpsMsgs.tLastTimeUtc_ms = tNow_ms;
                 }
                 break;
             }
@@ -657,21 +667,27 @@ static inline void _printUptimeStamp()
 }
 
 /* _handleConsole — Once per second, print a compact, uniform status summary. */
-static void _handleConsole()
+static void _handleConsole(uint32_t tNow_ms)
 {
     static unsigned long lastPrint_ms = 0;
-    if (millis() - lastPrint_ms >= 1000)
+    if (tNow_ms - lastPrint_ms >= 1000)
     {
-        lastPrint_ms = millis();
+        lastPrint_ms = tNow_ms;
+
+        bool haveGga     = _gnssMsgCurrent(g_gpsMsgs.tLastGga_ms);
+        bool haveRmc     = _gnssMsgCurrent(g_gpsMsgs.tLastRmc_ms);
+        bool haveGsa     = _gnssMsgCurrent(g_gpsMsgs.tLastGsa_ms);
+        bool haveTimTp   = _gnssMsgCurrent(g_gpsMsgs.tLastTimTp_ms);
+        bool haveTimeUtc = _gnssMsgCurrent(g_gpsMsgs.tLastTimeUtc_ms);
 
         // =================== GPS ===================
         _printUptimeStamp();
         CONSOLE.print("[GPS] UTC:");
-        if (g_gpsMsgs.haveGga && (g_gpsMsgs.gga.utcHhmmss > 0.0))
+        if (haveGga && (g_gpsMsgs.gga.utcHhmmss > 0.0))
         {
             _printUtcFromHhmmss(g_gpsMsgs.gga.utcHhmmss);
         }
-        else if (g_gpsMsgs.haveRmc && (g_gpsMsgs.rmc.utcHhmmss > 0.0))
+        else if (haveRmc && (g_gpsMsgs.rmc.utcHhmmss > 0.0))
         {
             _printUtcFromHhmmss(g_gpsMsgs.rmc.utcHhmmss);
         }
@@ -682,7 +698,7 @@ static void _handleConsole()
 
         // Fix quality / type / sats used
         CONSOLE.print(" | FixQ:");
-        if (g_gpsMsgs.haveGga)
+        if (haveGga)
         {
             CONSOLE.print(g_gpsMsgs.gga.fixQ);
         }
@@ -692,7 +708,7 @@ static void _handleConsole()
         }
 
         CONSOLE.print(" | FixType:");
-        if (g_gpsMsgs.haveGsa)
+        if (haveGsa)
         {
             CONSOLE.print(g_gpsMsgs.gsa.fixType);
         }
@@ -702,11 +718,11 @@ static void _handleConsole()
         }
 
         CONSOLE.print(" | SatsUsed:");
-        if (g_gpsMsgs.haveGga && g_gpsMsgs.gga.sats >= 0)
+        if (haveGga && g_gpsMsgs.gga.sats >= 0)
         {
             CONSOLE.print(g_gpsMsgs.gga.sats);
         }
-        else if (g_gpsMsgs.haveGsa && g_gpsMsgs.gsa.used > 0)
+        else if (haveGsa && g_gpsMsgs.gsa.used > 0)
         {
             CONSOLE.print(g_gpsMsgs.gsa.used);
         }
@@ -717,7 +733,7 @@ static void _handleConsole()
 
         // DOPs
         CONSOLE.print(" | DOP_P:");
-        if (g_gpsMsgs.haveGsa && !isnan(g_gpsMsgs.gsa.pdop))
+        if (haveGsa && !isnan(g_gpsMsgs.gsa.pdop))
         {
             CONSOLE.print(g_gpsMsgs.gsa.pdop, 2);
         }
@@ -727,11 +743,11 @@ static void _handleConsole()
         }
 
         CONSOLE.print(" | DOP_H:");
-        if (g_gpsMsgs.haveGsa && !isnan(g_gpsMsgs.gsa.hdop))
+        if (haveGsa && !isnan(g_gpsMsgs.gsa.hdop))
         {
             CONSOLE.print(g_gpsMsgs.gsa.hdop, 2);
         }
-        else if (g_gpsMsgs.haveGga && !isnan(g_gpsMsgs.gga.hdop))
+        else if (haveGga && !isnan(g_gpsMsgs.gga.hdop))
         {
             CONSOLE.print(g_gpsMsgs.gga.hdop, 2);
         }
@@ -741,7 +757,7 @@ static void _handleConsole()
         }
 
         CONSOLE.print(" | DOP_V:");
-        if (g_gpsMsgs.haveGsa && !isnan(g_gpsMsgs.gsa.vdop))
+        if (haveGsa && !isnan(g_gpsMsgs.gsa.vdop))
         {
             CONSOLE.print(g_gpsMsgs.gsa.vdop, 2);
         }
@@ -753,12 +769,12 @@ static void _handleConsole()
         // Position / Altitude
         CONSOLE.print(" | LLA:");
         bool haveLl = false;
-        if (g_gpsMsgs.haveGga && !isnan(g_gpsMsgs.gga.latDeg) && !isnan(g_gpsMsgs.gga.lonDeg))
+        if (haveGga && !isnan(g_gpsMsgs.gga.latDeg) && !isnan(g_gpsMsgs.gga.lonDeg))
         {
             CONSOLE.printf("%.7f,%.7f", g_gpsMsgs.gga.latDeg, g_gpsMsgs.gga.lonDeg);
             haveLl = true;
         }
-        else if (g_gpsMsgs.haveRmc && !isnan(g_gpsMsgs.rmc.latDeg) && !isnan(g_gpsMsgs.rmc.lonDeg))
+        else if (haveRmc && !isnan(g_gpsMsgs.rmc.latDeg) && !isnan(g_gpsMsgs.rmc.lonDeg))
         {
             CONSOLE.printf("%.7f,%.7f", g_gpsMsgs.rmc.latDeg, g_gpsMsgs.rmc.lonDeg);
             haveLl = true;
@@ -769,7 +785,7 @@ static void _handleConsole()
         }
 
         CONSOLE.print(" | Alt_m:");
-        if (g_gpsMsgs.haveGga && !isnan(g_gpsMsgs.gga.altM))
+        if (haveGga && !isnan(g_gpsMsgs.gga.altM))
         {
             CONSOLE.print(g_gpsMsgs.gga.altM, 2);
         }
@@ -791,7 +807,7 @@ static void _handleConsole()
 
         // TIM-TP qErr and NAV-TIMEUTC tAcc
         CONSOLE.print(" | qErr_ns:");
-        if (g_gpsMsgs.haveTimTp)
+        if (haveTimTp)
         {
             CONSOLE.print(g_gpsMsgs.timTp.qErrNs);
         }
@@ -801,7 +817,7 @@ static void _handleConsole()
         }
 
         CONSOLE.print(" | tAcc_ns:");
-        if (g_gpsMsgs.haveTimeUtc)
+        if (haveTimeUtc)
         {
             CONSOLE.print(g_gpsMsgs.timeUtc.tAccNs);
         }
@@ -860,14 +876,14 @@ static void _handleConsole()
 // =====================================================================================================================
 /* _handlePps — Handle 1 PPS capture; validate and feed the averaging window. */
 // =====================================================================================================================
-static void _handlePps()
+static void _handlePps(uint32_t tNow_ms)
 {
     uint32_t tenMhzCount = 0;
 
     /* if this is true, we've gotten a PPS and latched the 10MHzCount in hardware */
     if (_poll10MHzCount(&tenMhzCount))
     {
-        g_tLastPps_ms = millis();
+        g_tLastPps_ms = tNow_ms;
 
         if (tenMhzCount == 0)
         {
@@ -894,7 +910,7 @@ static void _handlePps()
 // =====================================================================================================================
 /* _handleOscTuning — Per-PPS PI phase loop + slow FLL trim + hold/tunnel gating. */
 // =====================================================================================================================
-void _handleOscTuning()
+void _handleOscTuning(uint32_t tNow_ms)
 {
     if (!g_tuningCycle || g_clkRxErr)
     {
@@ -903,14 +919,12 @@ void _handleOscTuning()
     }
     // Measure elapsed time since last PPS to stabilize slew behavior
     static uint32_t s_lastPps_ms = 0;
-    const uint32_t  now_ms       = millis();
-    const double    dt_s         = (s_lastPps_ms == 0) ? 1.0 : (double)(now_ms - s_lastPps_ms) / 1000.0;
-    s_lastPps_ms                 = now_ms;
+    const double    dt_s         = (s_lastPps_ms == 0) ? 1.0 : (double)(tNow_ms - s_lastPps_ms) / 1000.0;
+    s_lastPps_ms                 = tNow_ms;
 
     // ---- PPS quality (UBX TIM-TP) ----
-    const bool  haveQerr = g_gpsMsgs.haveTimTp;
+    const bool  haveQerr = _gnssMsgCurrent(g_gpsMsgs.tLastTimTp_ms);
     const float qErr_ns  = g_gpsMsgs.timTp.qErrNs;
-    g_gpsMsgs.haveTimTp  = false;  // consume
 
     // 1) Signed cycle error (integer cycles over 1 s gate) with fractional correction from qErr
     const int64_t dCycles_raw = (int64_t)g_gpsDoCtrl.tenMhzCount_hz - (int64_t)g_gpsDoCtrl.f0_hz;
@@ -991,9 +1005,9 @@ void _handleOscTuning()
     static uint32_t _tLastFll_ms = 0;
     double          dvFll_v      = 0.0;
 
-    if ((now_ms - _tLastFll_ms) >= g_gpsDoCtrl.fllUpdate_s * 1000u)
+    if ((tNow_ms - _tLastFll_ms) >= g_gpsDoCtrl.fllUpdate_s * 1000u)
     {
-        _tLastFll_ms = now_ms;
+        _tLastFll_ms = tNow_ms;
 
         if (_tenMhzAvgReady() && (g_gpsDoCtrl.ocxo_hz_per_v != 0.0))
         {
@@ -1053,7 +1067,7 @@ void _handleOscTuning()
 // =====================================================================================================================
 /* _handleLockLogic — Simple lock/unlock state machine based on phase error magnitude. */
 // =====================================================================================================================
-static void _handleLockLogic()
+static void _handleLockLogic(uint32_t tNow_ms)
 {
     // ---------- Tunables ----------
     const double   enterPhase_ns = 5.0;
@@ -1071,7 +1085,7 @@ static void _handleLockLogic()
     static uint8_t slipStrikes     = 0;
 
     // ---------- Guards ----------
-    if (((millis() - g_tLastPps_ms) > maxPpsGap_ms) || g_clkRxErr)
+    if (((tNow_ms - g_tLastPps_ms) > maxPpsGap_ms) || g_clkRxErr)
     {
         g_gpsDoCtrl.locked     = false;
         g_gpsDoCtrl.goodCycles = 0;
@@ -1146,13 +1160,12 @@ static void _handleLockLogic()
 // =====================================================================================================================
 /* _handleLeds — Blink PPS LED and show lock status on LOCK LED. */
 // =====================================================================================================================
-static void _handleLeds()
+static void _handleLeds(uint32_t tNow_ms)
 {
     static bool     lockedLedState = false;
     static bool     ppsLedState    = false;
     static uint32_t ppsLedOn_ms    = 0;
 
-    uint32_t tNow_ms = millis();
 
     if (g_gpsDoCtrl.locked && !lockedLedState)
     {
@@ -1206,11 +1219,11 @@ static inline void _lcdPrintRow(uint8_t row, const char* text)
 static inline String _utcStrCompact()
 {
     double hhmmss = 0.0;
-    if (g_gpsMsgs.haveGga && (g_gpsMsgs.gga.utcHhmmss > 0.0))
+    if (_gnssMsgCurrent(g_gpsMsgs.tLastGga_ms) && (g_gpsMsgs.gga.utcHhmmss > 0.0))
     {
         hhmmss = g_gpsMsgs.gga.utcHhmmss;
     }
-    else if (g_gpsMsgs.haveRmc && (g_gpsMsgs.rmc.utcHhmmss > 0.0))
+    else if (_gnssMsgCurrent(g_gpsMsgs.tLastRmc_ms) && (g_gpsMsgs.rmc.utcHhmmss > 0.0))
     {
         hhmmss = g_gpsMsgs.rmc.utcHhmmss;
     }
@@ -1260,11 +1273,11 @@ static inline void _fmtTimeAccCompact(char* out, size_t outsz, long tAcc_ns)
 
 static inline uint8_t _satsUsed()
 {
-    if (g_gpsMsgs.haveGga && g_gpsMsgs.gga.sats >= 0)
+    if (_gnssMsgCurrent(g_gpsMsgs.tLastGga_ms) && g_gpsMsgs.gga.sats >= 0)
     {
         return (uint8_t)g_gpsMsgs.gga.sats;
     }
-    if (g_gpsMsgs.haveGsa && g_gpsMsgs.gsa.used > 0)
+    if (_gnssMsgCurrent(g_gpsMsgs.tLastGsa_ms) && g_gpsMsgs.gsa.used > 0)
     {
         return (uint8_t)g_gpsMsgs.gsa.used;
     }
@@ -1275,13 +1288,13 @@ static inline void _fmtLatLonLines(char* line2, size_t sz2, char* line3, size_t 
 {
     double lat = NAN, lon = NAN, alt_m = NAN;
 
-    if (g_gpsMsgs.haveGga && !isnan(g_gpsMsgs.gga.latDeg) && !isnan(g_gpsMsgs.gga.lonDeg))
+    if (_gnssMsgCurrent(g_gpsMsgs.tLastGga_ms) && !isnan(g_gpsMsgs.gga.latDeg) && !isnan(g_gpsMsgs.gga.lonDeg))
     {
         lat   = g_gpsMsgs.gga.latDeg;
         lon   = g_gpsMsgs.gga.lonDeg;
-        alt_m = g_gpsMsgs.haveGga && !isnan(g_gpsMsgs.gga.altM) ? g_gpsMsgs.gga.altM : NAN;
+        alt_m = !isnan(g_gpsMsgs.gga.altM) ? g_gpsMsgs.gga.altM : NAN;
     }
-    else if (g_gpsMsgs.haveRmc && !isnan(g_gpsMsgs.rmc.latDeg) && !isnan(g_gpsMsgs.rmc.lonDeg))
+    else if (_gnssMsgCurrent(g_gpsMsgs.tLastRmc_ms) && !isnan(g_gpsMsgs.rmc.latDeg) && !isnan(g_gpsMsgs.rmc.lonDeg))
     {
         lat   = g_gpsMsgs.rmc.latDeg;
         lon   = g_gpsMsgs.rmc.lonDeg;
@@ -1462,22 +1475,21 @@ static void _fmtUpTime(const Uptime& u, char* out, size_t outsz)
    Row1: Avg frequency (MHz) + avg ppb
    Rows2-3: cycle between (0) Uptime + SU/tAcc/V, (1) Lat / Lon(+Alt), (2) Top satellites (2 rows)
 */
-static void _handleLCD()
+static void _handleLCD(uint32_t tNow_ms)
 {
     static unsigned long lastUpdate_ms = 0;
     static uint32_t      lastCycle_ms  = 0;
     static uint8_t       cycleIdx      = 0;  // 0: uptime+sys, 1: lat/lon, 2: sats
 
-    const unsigned long now_ms = millis();
-    if ((now_ms - lastUpdate_ms) < 1000UL)
+    if ((tNow_ms - lastUpdate_ms) < 1000UL)
     {
         return;
     }
-    lastUpdate_ms = now_ms;
+    lastUpdate_ms = tNow_ms;
 
-    if ((now_ms - lastCycle_ms) >= (k_lcdCyclePeriod_s * 1000UL))
+    if ((tNow_ms - lastCycle_ms) >= (k_lcdCyclePeriod_s * 1000UL))
     {
-        lastCycle_ms = now_ms;
+        lastCycle_ms = tNow_ms;
         cycleIdx = (uint8_t)((cycleIdx + 1) % 3);
     }
 
@@ -1524,7 +1536,7 @@ static void _handleLCD()
         {
             char tbuf[8];
             long tAcc_ns = -1;
-            if (g_gpsMsgs.haveTimeUtc)
+            if (_gnssMsgCurrent(g_gpsMsgs.tLastTimeUtc_ms))
             {
                 tAcc_ns = (long)g_gpsMsgs.timeUtc.tAccNs;
             }
@@ -1565,22 +1577,20 @@ static void _handleLCD()
 // =====================================================================================================================
 /* _handleUptime - Calculate a rollover safe uptime  */
 // =====================================================================================================================
-static void _handleUptime()
+static void _handleUptime(uint32_t tNow_ms)
 {
     static bool     init    = false;
     static uint32_t last_ms = 0;
     static uint64_t acc_ms  = 0;
 
-    uint32_t now_ms = millis();
-
     if (!init)
     {
         init    = true;
-        last_ms = now_ms;
+        last_ms = tNow_ms;
     }
 
-    uint32_t delta_ms = now_ms - last_ms;   // wrap-safe unsigned diff
-    last_ms = now_ms;
+    uint32_t delta_ms = tNow_ms - last_ms;   // wrap-safe unsigned diff
+    last_ms = tNow_ms;
     acc_ms += (uint64_t)delta_ms;
 
     uint64_t t = acc_ms;
@@ -1607,16 +1617,17 @@ static void _handleUptime()
 /* loop — Service PPS, LEDs, GNSS, console, control, and lock logic. */
 void loop()
 {
-    _handleUptime();
+    uint32_t tLoop_ms = millis();
 
-    _handlePps();
-    _handleGnss();
-    _handleOscTuning();
-    _handleLockLogic();
+    _handleUptime(tLoop_ms);
+
+    _handlePps(tLoop_ms);
+    _handleGnss(tLoop_ms);
+    _handleOscTuning(tLoop_ms);
+    _handleLockLogic(tLoop_ms);
     
-    _handleLeds();
-    _handleConsole();
-    _handleLCD();
+    _handleLeds(tLoop_ms);
+    _handleConsole(tLoop_ms);
+    _handleLCD(tLoop_ms);
 
-    g_tuningCycle = false;
 }
