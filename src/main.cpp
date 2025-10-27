@@ -4,12 +4,22 @@
 #include <Arduino.h>
 #include <imxrt.h>
 #include "gnss_ubx5.h"
-#include "DAC8550.h"
 #include "LiquidCrystal_I2C.h"
+
+#include "DAC8550.h"
+#include "Teensy_PWM.h"
+
 
 // =====================================================================================================================
 // Options / Configuration
 // =====================================================================================================================
+// #define PWM_OSC_TUNE
+#define DAC_OSC_TUNE
+
+#if (defined(PWM_OSC_TUNE) && defined(DAC_OSC_TUNE))
+#error Only select PWM_OSC_TUNE or DAC_OSC_TUNE not both
+#endif // OSC TUNE SELECTION
+
 static const bool     k_enableSurveyIn         = true;
 static const uint32_t k_surveyInMinDur_s       = 600;
 static const uint32_t k_surveyInVarLimit       = 900000;
@@ -26,7 +36,7 @@ static bool     g_svinSubscribed  = false;
 static bool     g_svinStartedByUs = false;
 static bool     g_tuningCycle     = false;
 static uint32_t g_tLastPps_ms     = 0;
-static bool     g_clkRxErr        = false;
+static bool     g_oscRxErr        = false;
 
 // =====================================================================================================================
 // Latest decoded NMEA/UBX message cache
@@ -66,25 +76,38 @@ static bool    g_gsvComplete = false;
 // 10 MHz is on PIN 19
 // 1 PPS is on PIN 18
 
-#define GNSS_SERIAL    Serial5
-#define CONSOLE        Serial
-#define LOCKED_LED_PIN 15
-#define PPS_LED_PIN    14
-#define DAC_CS_PIN     10
+#define GNSS_SERIAL         Serial5
+#define CONSOLE             Serial
+#define LOCKED_LED_PIN      15
+#define PPS_LED_PIN         14
+#define OSC_TUNE_DAC_CS_PIN 10
 // DAC CLK is on Pin   13
 // DAC DAT is on Pin   11
-
+#define OSC_TUNE_PWM_PIN 5
 
 // =====================================================================================================================
 // DAC / Analog config
 // =====================================================================================================================
-#define DAC_VREF   3.3f
-#define DAC_COUNTS 65536U
-static const float k_dacZeroVal = DAC_VREF / 2.0f;        // volts
-static const float k_dacLsb     = DAC_VREF / DAC_COUNTS;  // volts per count
+#ifdef DAC_OSC_TUNE
+#define OSC_TUNE_VREF   3.3f
+#define OSC_TUNE_COUNTS 65536U
+static const float k_oscTuneZeroVal = OSC_TUNE_VREF / 2.0f;             // volts
+static const float k_oscTuneLsb     = OSC_TUNE_VREF / OSC_TUNE_COUNTS;  // volts per count
 
-DAC8550 g_clkDac(DAC_CS_PIN);
+DAC8550 g_oscTuneDac(OSC_TUNE_DAC_CS_PIN);
+#endif  // DAC_OSC_TUNE
 
+// =====================================================================================================================
+// PWM Option instead of discrete DAC
+// =====================================================================================================================
+#ifdef PWM_OSC_TUNE
+Teensy_PWM* g_oscTunePwm;
+#define OSC_TUNE_VREF   3.3f
+#define OSC_TUNE_COUNTS 65536U
+static const float k_clkTunePwmFreq = 1000.0f;
+static const float k_oscTuneZeroVal = 0.0f;                             // volts
+static const float k_oscTuneLsb     = OSC_TUNE_VREF / OSC_TUNE_COUNTS;  // volts per count
+#endif                                                                  // PWM_OSC_TUNE
 
 // =====================================================================================================================
 // LCDisplay Config
@@ -127,11 +150,11 @@ struct TenMhzAvgState
 struct GpsdoCtrl
 {
     // Config
-    double ocxo_hz_per_v   = 5.0;         // OCXO EFC sensitivity (Hz/V), signed
-    double vMin            = 0.0;         // V
-    double vMax            = DAC_VREF;    // V
-    double slewMax_v_per_s = 0.010;       // V/s (max change per update)
-    double f0_hz           = 10000000.0;  // expected frequency
+    double ocxo_hz_per_v   = 5.0;                // OCXO EFC sensitivity (Hz/V), signed
+    double vMin            = 0.0;                // V
+    double vMax            = OSC_TUNE_VREF;      // V
+    double slewMax_v_per_s = 0.010;              // V/s (max change per update)
+    double f0_hz           = 10000000.0;         // expected frequency
 
     // ---- Slow FLL + hold/tunnel parameters ----
     uint32_t fllUpdate_s   = 120;   // run slow FLL every N seconds
@@ -402,13 +425,25 @@ static void _gsvIngest(const NmeaGsv& part)
 }
 
 // =====================================================================================================================
-// DAC helper
+// OSC Tuning Helpers
 // =====================================================================================================================
 
 /* _getDacVal — Convert desired voltage to DAC code (counts). */
-static int _getDacVal(float desired_v)
+static int _getTuneValDiscrete(float desired_v)
 {
-    return (desired_v - k_dacZeroVal) / k_dacLsb;
+    return (desired_v - k_oscTuneZeroVal) / k_oscTuneLsb;
+}
+
+static void _setOscTuneVoltage(float desired_v)
+{
+#ifdef DAC_OSC_TUNE
+    g_oscTuneDac.setValue(_getTuneValDiscrete(desired_v));
+#endif  // DAC_OSC_TUNE
+
+#ifdef PWM_OSC_TUNE
+    g_oscTunePwm->setPWM_Int(OSC_TUNE_PWM_PIN, k_clkTunePwmFreq, _getTuneValDiscrete(desired_v));
+#endif // PWM_OSC_TUNE
+
 }
 
 // =====================================================================================================================
@@ -458,14 +493,20 @@ void setup()
 
     gnssPollCfgTmode();  // We'll decide what to do in the UBX handler below.
 
+#ifdef DAC_OSC_TUNE
     CONSOLE.printf("Initializing DAC\r\n");
     SPI.begin();
-    g_clkDac.begin();
-    int targetVoltageRaw = _getDacVal(g_gpsDoCtrl.target_v);
-    g_clkDac.setValue(targetVoltageRaw);
+    g_oscTuneDac.begin();
+    _setOscTuneVoltage(g_gpsDoCtrl.target_v);
     CONSOLE.printf("DAC Initialized\r\n");
+#endif // DAC_OSC_TUNE
 
-    // setup pulse monitoring
+#ifdef PWM_OSC_TUNE
+    g_oscTunePwm = new Teensy_PWM(OSC_TUNE_PWM_PIN, k_clkTunePwmFreq, 50.0);
+    _setOscTuneVoltage(g_gpsDoCtrl.target_v);
+#endif // PWM_OSC_TUNE
+
+
     CONSOLE.printf("Beginning Pulse Counting \r\n");
     _counterInit();
 }
@@ -889,20 +930,20 @@ static void _handlePps(uint32_t tNow_ms)
         {
             CONSOLE.printf("Error: Clock not detected \r\n", tenMhzCount);
             g_gpsDoCtrl.tenMhzCount_hz = (uint32_t)-1;
-            g_clkRxErr                 = true;
+            g_oscRxErr                 = true;
 
         }
         else if (tenMhzCount > 10000100 || tenMhzCount < 9999900)
         {
             CONSOLE.printf("Warning, Clk count significantly out of range: %i\r\n", tenMhzCount);
             g_gpsDoCtrl.tenMhzCount_hz = 0;
-            g_clkRxErr                 = true;
+            g_oscRxErr                 = true;
         }
         else
         {
             g_gpsDoCtrl.tenMhzCount_hz = tenMhzCount;
             g_tuningCycle              = true;
-            g_clkRxErr                 = false;
+            g_oscRxErr                 = false;
         }
     }
 }
@@ -912,7 +953,7 @@ static void _handlePps(uint32_t tNow_ms)
 // =====================================================================================================================
 void _handleOscTuning(uint32_t tNow_ms)
 {
-    if (!g_tuningCycle || g_clkRxErr)
+    if (!g_tuningCycle || g_oscRxErr)
     {
         return;
 
@@ -942,28 +983,8 @@ void _handleOscTuning(uint32_t tNow_ms)
     }
 
     // 2) Phase error in seconds
-    g_gpsDoCtrl.phaseErr_s = g_gpsDoCtrl.dCycles / g_gpsDoCtrl.f0_hz;
+    g_gpsDoCtrl.phaseErr_s = (g_gpsDoCtrl.dCycles / g_gpsDoCtrl.f0_hz) * dt_s;
 
-    // 3) Deadband (P-path only) with ±1-cycle flip exemption
-    const double deadband_s = 2e-9;  // 2 ns
-    const double err_s      = g_gpsDoCtrl.phaseErr_s;
-
-    double errP_s = err_s;
-
-    const double aerr           = fabs(err_s);
-    const bool   isOneCycleFlip = (llabs(dCycles_raw) == 1);  // exact ±1 cycle in the gate
-
-    if (!isOneCycleFlip)
-    {
-        if (aerr > deadband_s)
-            errP_s = copysign(aerr - deadband_s, err_s);
-        else
-        {
-            errP_s = 0.0;                // mute P inside deadband
-            g_gpsDoCtrl.integ *= 0.999;  // gentle bleed
-        }
-    }
-    // else: bypass deadband entirely so P sees the small ns error near the boundary
 
     // ---- HOLD / TUNNEL ----
     g_gpsDoCtrl.haveAvg = _tenMhzAvgReady();
@@ -971,13 +992,13 @@ void _handleOscTuning(uint32_t tNow_ms)
     g_gpsDoCtrl.inHold
         = g_gpsDoCtrl.haveAvg && g_gpsDoCtrl.goodPps && (fabs(g_gpsDoCtrl.avgErr_ppb) <= g_gpsDoCtrl.hold_ppb);
 
-    // 4) PI — update integrator (optionally scale by dt)
-    g_gpsDoCtrl.integ += err_s * dt_s;
+    // 3) PI — update integrator
+    g_gpsDoCtrl.integ += g_gpsDoCtrl.phaseErr_s;
 
     // Optional: in hold, apply a slightly stronger leak to keep I from creeping.
     if (g_gpsDoCtrl.inHold)
     {
-        g_gpsDoCtrl.integ *= 0.9995;  // tweak or comment this line to keep original behavior
+        g_gpsDoCtrl.integ *= 0.9995;
     }
 
     // clamp integrator (units = seconds of phase)
@@ -992,13 +1013,13 @@ void _handleOscTuning(uint32_t tNow_ms)
     }
 
     // Convert phase errors (s) to Hz corrections
-    const double effErrP_s = g_gpsDoCtrl.inHold ? 0.0 : errP_s;  // mute P while in hold
+    const double effErrP_s = g_gpsDoCtrl.inHold ? 0.0 : g_gpsDoCtrl.phaseErr_s;  // mute P while in hold
     g_gpsDoCtrl.p_hz       = -(g_gpsDoCtrl.Kp * effErrP_s * g_gpsDoCtrl.f0_hz);
     g_gpsDoCtrl.i_hz       = -(g_gpsDoCtrl.Ki * g_gpsDoCtrl.integ * g_gpsDoCtrl.f0_hz);
 
     g_gpsDoCtrl.delta_hz = g_gpsDoCtrl.p_hz + g_gpsDoCtrl.i_hz;
 
-    // 5) Hz -> V
+    // 4) Hz -> V
     g_gpsDoCtrl.delta_v = (g_gpsDoCtrl.ocxo_hz_per_v != 0.0) ? (g_gpsDoCtrl.delta_hz / g_gpsDoCtrl.ocxo_hz_per_v) : 0.0;
 
     // ------------- SLOW FLL (outer loop) -------------
@@ -1060,8 +1081,7 @@ void _handleOscTuning(uint32_t tNow_ms)
     g_gpsDoCtrl.target_v = new_v;
 
     // 8) Push to DAC
-    const int targetVoltageRaw = _getDacVal(g_gpsDoCtrl.target_v);
-    g_clkDac.setValue(targetVoltageRaw);
+    _setOscTuneVoltage(g_gpsDoCtrl.target_v);
 }
 
 // =====================================================================================================================
@@ -1085,7 +1105,7 @@ static void _handleLockLogic(uint32_t tNow_ms)
     static uint8_t slipStrikes     = 0;
 
     // ---------- Guards ----------
-    if (((tNow_ms - g_tLastPps_ms) > maxPpsGap_ms) || g_clkRxErr)
+    if (((tNow_ms - g_tLastPps_ms) > maxPpsGap_ms) || g_oscRxErr)
     {
         g_gpsDoCtrl.locked     = false;
         g_gpsDoCtrl.goodCycles = 0;
@@ -1630,4 +1650,5 @@ void loop()
     _handleConsole(tLoop_ms);
     _handleLCD(tLoop_ms);
 
+    g_tuningCycle = false;
 }
