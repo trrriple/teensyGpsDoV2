@@ -5,6 +5,591 @@
 	(uuid "a7254994-6403-435e-b823-ccc6268898df")
 	(paper "A4")
 	(lib_symbols
+		(symbol "74xx:74HC14"
+			(pin_names
+				(offset 1.016)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "U"
+				(at 0 1.27 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "74HC14"
+				(at 0 -1.27 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" "http://www.ti.com/lit/gpn/sn74HC14"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "Hex inverter schmitt trigger"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_locked" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "HCMOS not inverter"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_fp_filters" "DIP*W7.62mm*"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "74HC14_1_0"
+				(polyline
+					(pts
+						(xy -3.81 3.81) (xy -3.81 -3.81) (xy 3.81 0) (xy -3.81 3.81)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+				(pin input line
+					(at -7.62 0 0)
+					(length 3.81)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin output inverted
+					(at 7.62 0 180)
+					(length 3.81)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "74HC14_1_1"
+				(polyline
+					(pts
+						(xy -2.54 -1.27) (xy -0.635 -1.27) (xy -0.635 1.27) (xy 0 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.905 -1.27) (xy -1.905 1.27) (xy -0.635 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "74HC14_2_0"
+				(polyline
+					(pts
+						(xy -3.81 3.81) (xy -3.81 -3.81) (xy 3.81 0) (xy -3.81 3.81)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+				(pin input line
+					(at -7.62 0 0)
+					(length 3.81)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin output inverted
+					(at 7.62 0 180)
+					(length 3.81)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "74HC14_2_1"
+				(polyline
+					(pts
+						(xy -2.54 -1.27) (xy -0.635 -1.27) (xy -0.635 1.27) (xy 0 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.905 -1.27) (xy -1.905 1.27) (xy -0.635 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "74HC14_3_0"
+				(polyline
+					(pts
+						(xy -3.81 3.81) (xy -3.81 -3.81) (xy 3.81 0) (xy -3.81 3.81)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+				(pin input line
+					(at -7.62 0 0)
+					(length 3.81)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin output inverted
+					(at 7.62 0 180)
+					(length 3.81)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "6"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "74HC14_3_1"
+				(polyline
+					(pts
+						(xy -2.54 -1.27) (xy -0.635 -1.27) (xy -0.635 1.27) (xy 0 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.905 -1.27) (xy -1.905 1.27) (xy -0.635 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "74HC14_4_0"
+				(polyline
+					(pts
+						(xy -3.81 3.81) (xy -3.81 -3.81) (xy 3.81 0) (xy -3.81 3.81)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+				(pin input line
+					(at -7.62 0 0)
+					(length 3.81)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "9"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin output inverted
+					(at 7.62 0 180)
+					(length 3.81)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "8"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "74HC14_4_1"
+				(polyline
+					(pts
+						(xy -2.54 -1.27) (xy -0.635 -1.27) (xy -0.635 1.27) (xy 0 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.905 -1.27) (xy -1.905 1.27) (xy -0.635 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "74HC14_5_0"
+				(polyline
+					(pts
+						(xy -3.81 3.81) (xy -3.81 -3.81) (xy 3.81 0) (xy -3.81 3.81)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+				(pin input line
+					(at -7.62 0 0)
+					(length 3.81)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "11"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin output inverted
+					(at 7.62 0 180)
+					(length 3.81)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "10"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "74HC14_5_1"
+				(polyline
+					(pts
+						(xy -2.54 -1.27) (xy -0.635 -1.27) (xy -0.635 1.27) (xy 0 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.905 -1.27) (xy -1.905 1.27) (xy -0.635 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "74HC14_6_0"
+				(polyline
+					(pts
+						(xy -3.81 3.81) (xy -3.81 -3.81) (xy 3.81 0) (xy -3.81 3.81)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+				(pin input line
+					(at -7.62 0 0)
+					(length 3.81)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "13"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin output inverted
+					(at 7.62 0 180)
+					(length 3.81)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "12"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "74HC14_6_1"
+				(polyline
+					(pts
+						(xy -2.54 -1.27) (xy -0.635 -1.27) (xy -0.635 1.27) (xy 0 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.905 -1.27) (xy -1.905 1.27) (xy -0.635 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "74HC14_7_0"
+				(pin power_in line
+					(at 0 12.7 270)
+					(length 5.08)
+					(name "VCC"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "14"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at 0 -12.7 90)
+					(length 5.08)
+					(name "GND"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "7"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(symbol "74HC14_7_1"
+				(rectangle
+					(start -5.08 7.62)
+					(end 5.08 -7.62)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Analog_DAC:DAC8550IxDGK"
 			(exclude_from_sim no)
 			(in_bom yes)
@@ -1101,6 +1686,157 @@
 				(pin passive line
 					(at 0 -2.54 90)
 					(length 2.032)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "Device:FerriteBead_Small"
+			(pin_numbers
+				(hide yes)
+			)
+			(pin_names
+				(offset 0)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "FB"
+				(at 1.905 1.27 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Value" "FerriteBead_Small"
+				(at 1.905 -1.27 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left)
+				)
+			)
+			(property "Footprint" ""
+				(at -1.778 0 90)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" "~"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "Ferrite bead, small symbol"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "L ferrite bead inductor filter"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_fp_filters" "Inductor_* L_* *Ferrite*"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "FerriteBead_Small_0_1"
+				(polyline
+					(pts
+						(xy -1.8288 0.2794) (xy -1.1176 1.4986) (xy 1.8288 -0.2032) (xy 1.1176 -1.4224) (xy -1.8288 0.2794)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 0 0.889) (xy 0 1.2954)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 0 -1.27) (xy 0 -0.7874)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "FerriteBead_Small_1_1"
+				(pin passive line
+					(at 0 2.54 270)
+					(length 1.27)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 0 -2.54 90)
+					(length 1.27)
 					(name "~"
 						(effects
 							(font
@@ -4658,6 +5394,16 @@
 	)
 	(wire
 		(pts
+			(xy 93.98 129.54) (xy 100.33 129.54)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0d3b2812-e4c0-4050-befd-36bb1dec86a2")
+	)
+	(wire
+		(pts
 			(xy 241.3 127) (xy 250.19 127)
 		)
 		(stroke
@@ -5128,6 +5874,16 @@
 	)
 	(wire
 		(pts
+			(xy 76.2 129.54) (xy 88.9 129.54)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5712ab59-9c5d-431e-81f7-139be3e02dab")
+	)
+	(wire
+		(pts
 			(xy 114.3 132.08) (xy 114.3 129.54)
 		)
 		(stroke
@@ -5205,16 +5961,6 @@
 			(type default)
 		)
 		(uuid "697ef9e9-6604-465b-b316-25c08c901619")
-	)
-	(wire
-		(pts
-			(xy 100.33 128.27) (xy 100.33 129.54)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "6a16c6a4-e210-43bc-b285-a347cd8c7d79")
 	)
 	(wire
 		(pts
@@ -5365,6 +6111,16 @@
 			(type default)
 		)
 		(uuid "8955473c-66df-4765-b07f-83af31b7bcef")
+	)
+	(wire
+		(pts
+			(xy 76.2 127) (xy 76.2 129.54)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "90837465-49a1-49bc-998c-50baf0b97307")
 	)
 	(wire
 		(pts
@@ -5608,7 +6364,7 @@
 	)
 	(wire
 		(pts
-			(xy 95.25 60.96) (xy 95.25 64.77)
+			(xy 95.25 53.34) (xy 95.25 55.88)
 		)
 		(stroke
 			(width 0)
@@ -5635,6 +6391,16 @@
 			(type default)
 		)
 		(uuid "c8461df6-5e31-4516-8705-c1cd3164508a")
+	)
+	(wire
+		(pts
+			(xy 95.25 60.96) (xy 95.25 64.77)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c8637b96-3ecb-4c0b-8aa7-3db83e99f985")
 	)
 	(wire
 		(pts
@@ -6083,6 +6849,110 @@
 		)
 	)
 	(symbol
+		(lib_id "74xx:74HC14")
+		(at 157.48 30.48 0)
+		(unit 3)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "01cd2b5f-d56e-4280-9376-861439c84b36")
+		(property "Reference" "U6"
+			(at 157.48 21.59 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "74HC14"
+			(at 157.48 24.13 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Package_DIP:DIP-14_W7.62mm_Socket"
+			(at 157.48 30.48 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "http://www.ti.com/lit/gpn/sn74HC14"
+			(at 157.48 30.48 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Hex inverter schmitt trigger"
+			(at 157.48 30.48 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "12"
+			(uuid "6fc3ba50-9c21-4b17-8630-3b4b74dd1868")
+		)
+		(pin "7"
+			(uuid "7365c2f7-05e1-46dc-ae7b-f2b01e5bde89")
+		)
+		(pin "3"
+			(uuid "cba15c2d-5b51-4d70-995b-21f01e24457c")
+		)
+		(pin "11"
+			(uuid "342329aa-f818-4474-8214-bd3254d8ee1e")
+		)
+		(pin "10"
+			(uuid "92d89017-6466-45fd-bf31-6d14d202fc45")
+		)
+		(pin "4"
+			(uuid "2e1ecb02-d1ff-499b-9153-5cd1b45c4f75")
+		)
+		(pin "5"
+			(uuid "7c7f0a2b-0ce2-4a8e-a196-26f14d50560f")
+		)
+		(pin "13"
+			(uuid "2d226bba-f019-487e-9cba-eade623dc086")
+		)
+		(pin "8"
+			(uuid "3b2aa9ec-b983-43cf-99ca-d6b62a364af2")
+		)
+		(pin "2"
+			(uuid "d8212532-20b9-4739-8eaa-b27cc388e246")
+		)
+		(pin "1"
+			(uuid "2e341c7b-9c80-4d94-aee2-326eaf4cdef4")
+		)
+		(pin "14"
+			(uuid "7244ad07-d5db-45b7-8ebb-50176d76e84f")
+		)
+		(pin "6"
+			(uuid "560df953-3dcd-4884-a873-78e8ff5e598d")
+		)
+		(pin "9"
+			(uuid "7da968df-9157-49c3-a25a-670f89aabb17")
+		)
+		(instances
+			(project ""
+				(path "/a7254994-6403-435e-b823-ccc6268898df"
+					(reference "U6")
+					(unit 3)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:GND")
 		(at 97.79 165.1 0)
 		(unit 1)
@@ -6279,6 +7149,110 @@
 			(project "teensyGpsDoV2"
 				(path "/a7254994-6403-435e-b823-ccc6268898df"
 					(reference "R6")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "74xx:74HC14")
+		(at 133.35 31.75 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "34019116-589e-4006-a92d-ee735d138bb6")
+		(property "Reference" "U6"
+			(at 133.35 22.86 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "74HC14"
+			(at 133.35 25.4 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Package_DIP:DIP-14_W7.62mm_Socket"
+			(at 133.35 31.75 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "http://www.ti.com/lit/gpn/sn74HC14"
+			(at 133.35 31.75 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Hex inverter schmitt trigger"
+			(at 133.35 31.75 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "12"
+			(uuid "6fc3ba50-9c21-4b17-8630-3b4b74dd1868")
+		)
+		(pin "7"
+			(uuid "7365c2f7-05e1-46dc-ae7b-f2b01e5bde89")
+		)
+		(pin "3"
+			(uuid "cba15c2d-5b51-4d70-995b-21f01e24457c")
+		)
+		(pin "11"
+			(uuid "342329aa-f818-4474-8214-bd3254d8ee1e")
+		)
+		(pin "10"
+			(uuid "92d89017-6466-45fd-bf31-6d14d202fc45")
+		)
+		(pin "4"
+			(uuid "2e1ecb02-d1ff-499b-9153-5cd1b45c4f75")
+		)
+		(pin "5"
+			(uuid "7c7f0a2b-0ce2-4a8e-a196-26f14d50560f")
+		)
+		(pin "13"
+			(uuid "2d226bba-f019-487e-9cba-eade623dc086")
+		)
+		(pin "8"
+			(uuid "3b2aa9ec-b983-43cf-99ca-d6b62a364af2")
+		)
+		(pin "2"
+			(uuid "d8212532-20b9-4739-8eaa-b27cc388e246")
+		)
+		(pin "1"
+			(uuid "2e341c7b-9c80-4d94-aee2-326eaf4cdef4")
+		)
+		(pin "14"
+			(uuid "7244ad07-d5db-45b7-8ebb-50176d76e84f")
+		)
+		(pin "6"
+			(uuid "560df953-3dcd-4884-a873-78e8ff5e598d")
+		)
+		(pin "9"
+			(uuid "7da968df-9157-49c3-a25a-670f89aabb17")
+		)
+		(instances
+			(project ""
+				(path "/a7254994-6403-435e-b823-ccc6268898df"
+					(reference "U6")
 					(unit 1)
 				)
 			)
@@ -7474,6 +8448,214 @@
 		)
 	)
 	(symbol
+		(lib_id "74xx:74HC14")
+		(at 180.34 46.99 0)
+		(unit 6)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "80d5bc0a-223f-4b64-8d88-11b42d26057a")
+		(property "Reference" "U6"
+			(at 180.34 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "74HC14"
+			(at 180.34 40.64 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Package_DIP:DIP-14_W7.62mm_Socket"
+			(at 180.34 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "http://www.ti.com/lit/gpn/sn74HC14"
+			(at 180.34 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Hex inverter schmitt trigger"
+			(at 180.34 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "12"
+			(uuid "6fc3ba50-9c21-4b17-8630-3b4b74dd1868")
+		)
+		(pin "7"
+			(uuid "7365c2f7-05e1-46dc-ae7b-f2b01e5bde89")
+		)
+		(pin "3"
+			(uuid "cba15c2d-5b51-4d70-995b-21f01e24457c")
+		)
+		(pin "11"
+			(uuid "342329aa-f818-4474-8214-bd3254d8ee1e")
+		)
+		(pin "10"
+			(uuid "92d89017-6466-45fd-bf31-6d14d202fc45")
+		)
+		(pin "4"
+			(uuid "2e1ecb02-d1ff-499b-9153-5cd1b45c4f75")
+		)
+		(pin "5"
+			(uuid "7c7f0a2b-0ce2-4a8e-a196-26f14d50560f")
+		)
+		(pin "13"
+			(uuid "2d226bba-f019-487e-9cba-eade623dc086")
+		)
+		(pin "8"
+			(uuid "3b2aa9ec-b983-43cf-99ca-d6b62a364af2")
+		)
+		(pin "2"
+			(uuid "d8212532-20b9-4739-8eaa-b27cc388e246")
+		)
+		(pin "1"
+			(uuid "2e341c7b-9c80-4d94-aee2-326eaf4cdef4")
+		)
+		(pin "14"
+			(uuid "7244ad07-d5db-45b7-8ebb-50176d76e84f")
+		)
+		(pin "6"
+			(uuid "560df953-3dcd-4884-a873-78e8ff5e598d")
+		)
+		(pin "9"
+			(uuid "7da968df-9157-49c3-a25a-670f89aabb17")
+		)
+		(instances
+			(project ""
+				(path "/a7254994-6403-435e-b823-ccc6268898df"
+					(reference "U6")
+					(unit 6)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "74xx:74HC14")
+		(at 180.34 30.48 0)
+		(unit 5)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "8b61f2a7-a91d-4906-908e-4e4ec0be3766")
+		(property "Reference" "U6"
+			(at 180.34 21.59 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "74HC14"
+			(at 180.34 24.13 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Package_DIP:DIP-14_W7.62mm_Socket"
+			(at 180.34 30.48 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "http://www.ti.com/lit/gpn/sn74HC14"
+			(at 180.34 30.48 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Hex inverter schmitt trigger"
+			(at 180.34 30.48 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "12"
+			(uuid "6fc3ba50-9c21-4b17-8630-3b4b74dd1868")
+		)
+		(pin "7"
+			(uuid "7365c2f7-05e1-46dc-ae7b-f2b01e5bde89")
+		)
+		(pin "3"
+			(uuid "cba15c2d-5b51-4d70-995b-21f01e24457c")
+		)
+		(pin "11"
+			(uuid "342329aa-f818-4474-8214-bd3254d8ee1e")
+		)
+		(pin "10"
+			(uuid "92d89017-6466-45fd-bf31-6d14d202fc45")
+		)
+		(pin "4"
+			(uuid "2e1ecb02-d1ff-499b-9153-5cd1b45c4f75")
+		)
+		(pin "5"
+			(uuid "7c7f0a2b-0ce2-4a8e-a196-26f14d50560f")
+		)
+		(pin "13"
+			(uuid "2d226bba-f019-487e-9cba-eade623dc086")
+		)
+		(pin "8"
+			(uuid "3b2aa9ec-b983-43cf-99ca-d6b62a364af2")
+		)
+		(pin "2"
+			(uuid "d8212532-20b9-4739-8eaa-b27cc388e246")
+		)
+		(pin "1"
+			(uuid "2e341c7b-9c80-4d94-aee2-326eaf4cdef4")
+		)
+		(pin "14"
+			(uuid "7244ad07-d5db-45b7-8ebb-50176d76e84f")
+		)
+		(pin "6"
+			(uuid "560df953-3dcd-4884-a873-78e8ff5e598d")
+		)
+		(pin "9"
+			(uuid "7da968df-9157-49c3-a25a-670f89aabb17")
+		)
+		(instances
+			(project ""
+				(path "/a7254994-6403-435e-b823-ccc6268898df"
+					(reference "U6")
+					(unit 5)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:C_Small_US")
 		(at 40.64 90.17 0)
 		(unit 1)
@@ -7966,6 +9148,74 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:FerriteBead_Small")
+		(at 91.44 129.54 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "9ccc9dbb-6887-400c-b21a-a9570d9c3182")
+		(property "Reference" "FB1"
+			(at 91.4019 123.19 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "133 @ 100 MHz"
+			(at 91.4019 125.73 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 91.44 131.318 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 91.44 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Ferrite bead, small symbol"
+			(at 91.44 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "2eb5176a-d4a8-4414-b5a2-20d127db1299")
+		)
+		(pin "1"
+			(uuid "0ecce580-a602-47d5-99ef-86c94704f0cb")
+		)
+		(instances
+			(project "teensyGpsDoV2"
+				(path "/a7254994-6403-435e-b823-ccc6268898df"
+					(reference "FB1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "Device:R")
 		(at 111.76 83.82 0)
 		(unit 1)
@@ -8031,6 +9281,112 @@
 				(path "/a7254994-6403-435e-b823-ccc6268898df"
 					(reference "R1")
 					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "74xx:74HC14")
+		(at 198.12 35.56 0)
+		(unit 7)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "ab0a8421-58c6-41a7-b88c-8a1ac5da0eca")
+		(property "Reference" "U6"
+			(at 204.47 34.2899 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "74HC14"
+			(at 204.47 36.8299 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Package_DIP:DIP-14_W7.62mm_Socket"
+			(at 198.12 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "http://www.ti.com/lit/gpn/sn74HC14"
+			(at 198.12 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Hex inverter schmitt trigger"
+			(at 198.12 35.56 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "12"
+			(uuid "6fc3ba50-9c21-4b17-8630-3b4b74dd1868")
+		)
+		(pin "7"
+			(uuid "7365c2f7-05e1-46dc-ae7b-f2b01e5bde89")
+		)
+		(pin "3"
+			(uuid "cba15c2d-5b51-4d70-995b-21f01e24457c")
+		)
+		(pin "11"
+			(uuid "342329aa-f818-4474-8214-bd3254d8ee1e")
+		)
+		(pin "10"
+			(uuid "92d89017-6466-45fd-bf31-6d14d202fc45")
+		)
+		(pin "4"
+			(uuid "2e1ecb02-d1ff-499b-9153-5cd1b45c4f75")
+		)
+		(pin "5"
+			(uuid "7c7f0a2b-0ce2-4a8e-a196-26f14d50560f")
+		)
+		(pin "13"
+			(uuid "2d226bba-f019-487e-9cba-eade623dc086")
+		)
+		(pin "8"
+			(uuid "3b2aa9ec-b983-43cf-99ca-d6b62a364af2")
+		)
+		(pin "2"
+			(uuid "d8212532-20b9-4739-8eaa-b27cc388e246")
+		)
+		(pin "1"
+			(uuid "2e341c7b-9c80-4d94-aee2-326eaf4cdef4")
+		)
+		(pin "14"
+			(uuid "7244ad07-d5db-45b7-8ebb-50176d76e84f")
+		)
+		(pin "6"
+			(uuid "560df953-3dcd-4884-a873-78e8ff5e598d")
+		)
+		(pin "9"
+			(uuid "7da968df-9157-49c3-a25a-670f89aabb17")
+		)
+		(instances
+			(project ""
+				(path "/a7254994-6403-435e-b823-ccc6268898df"
+					(reference "U6")
+					(unit 7)
 				)
 			)
 		)
@@ -8105,7 +9461,7 @@
 	)
 	(symbol
 		(lib_id "power:+5VD")
-		(at 95.25 60.96 0)
+		(at 95.25 53.34 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -8114,7 +9470,7 @@
 		(fields_autoplaced yes)
 		(uuid "b1107fa9-1c6a-404e-94e9-fdbae7799398")
 		(property "Reference" "#PWR015"
-			(at 95.25 64.77 0)
+			(at 95.25 57.15 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8123,7 +9479,7 @@
 			)
 		)
 		(property "Value" "+5VD"
-			(at 95.25 55.88 0)
+			(at 95.25 48.26 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8131,7 +9487,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 95.25 60.96 0)
+			(at 95.25 53.34 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8140,7 +9496,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 95.25 60.96 0)
+			(at 95.25 53.34 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8149,7 +9505,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+5VD\""
-			(at 95.25 60.96 0)
+			(at 95.25 53.34 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8533,6 +9889,76 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:FerriteBead_Small")
+		(at 95.25 58.42 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "c2aa7eab-3f24-4ba0-afef-8e37cca772c3")
+		(property "Reference" "FB2"
+			(at 97.79 57.1118 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "133 @ 100 MHz"
+			(at 97.79 59.6518 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 93.472 58.42 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 95.25 58.42 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Ferrite bead, small symbol"
+			(at 95.25 58.42 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "e730bead-b0ad-4b10-9b56-14ad00570128")
+		)
+		(pin "1"
+			(uuid "78d6927f-b06e-47f5-a358-3feec13081b2")
+		)
+		(instances
+			(project "teensyGpsDoV2"
+				(path "/a7254994-6403-435e-b823-ccc6268898df"
+					(reference "FB2")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:GND")
 		(at 46.99 96.52 0)
 		(unit 1)
@@ -8600,7 +10026,7 @@
 	)
 	(symbol
 		(lib_id "power:+3.3V")
-		(at 100.33 128.27 0)
+		(at 76.2 127 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -8609,7 +10035,7 @@
 		(fields_autoplaced yes)
 		(uuid "c99b2a4d-f454-47f9-989c-87385000b3f8")
 		(property "Reference" "#PWR07"
-			(at 100.33 132.08 0)
+			(at 76.2 130.81 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8618,7 +10044,7 @@
 			)
 		)
 		(property "Value" "+3.3V"
-			(at 100.33 123.19 0)
+			(at 76.2 121.92 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8626,7 +10052,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 100.33 128.27 0)
+			(at 76.2 127 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8635,7 +10061,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 100.33 128.27 0)
+			(at 76.2 127 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8644,7 +10070,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+3.3V\""
-			(at 100.33 128.27 0)
+			(at 76.2 127 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8660,6 +10086,110 @@
 				(path "/a7254994-6403-435e-b823-ccc6268898df"
 					(reference "#PWR07")
 					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "74xx:74HC14")
+		(at 156.21 46.99 0)
+		(unit 4)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "c9f18c3e-25fc-4971-b9b6-a2412dae0fc7")
+		(property "Reference" "U6"
+			(at 156.21 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "74HC14"
+			(at 156.21 40.64 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Package_DIP:DIP-14_W7.62mm_Socket"
+			(at 156.21 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "http://www.ti.com/lit/gpn/sn74HC14"
+			(at 156.21 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Hex inverter schmitt trigger"
+			(at 156.21 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "12"
+			(uuid "6fc3ba50-9c21-4b17-8630-3b4b74dd1868")
+		)
+		(pin "7"
+			(uuid "7365c2f7-05e1-46dc-ae7b-f2b01e5bde89")
+		)
+		(pin "3"
+			(uuid "cba15c2d-5b51-4d70-995b-21f01e24457c")
+		)
+		(pin "11"
+			(uuid "342329aa-f818-4474-8214-bd3254d8ee1e")
+		)
+		(pin "10"
+			(uuid "92d89017-6466-45fd-bf31-6d14d202fc45")
+		)
+		(pin "4"
+			(uuid "2e1ecb02-d1ff-499b-9153-5cd1b45c4f75")
+		)
+		(pin "5"
+			(uuid "7c7f0a2b-0ce2-4a8e-a196-26f14d50560f")
+		)
+		(pin "13"
+			(uuid "2d226bba-f019-487e-9cba-eade623dc086")
+		)
+		(pin "8"
+			(uuid "3b2aa9ec-b983-43cf-99ca-d6b62a364af2")
+		)
+		(pin "2"
+			(uuid "d8212532-20b9-4739-8eaa-b27cc388e246")
+		)
+		(pin "1"
+			(uuid "2e341c7b-9c80-4d94-aee2-326eaf4cdef4")
+		)
+		(pin "14"
+			(uuid "7244ad07-d5db-45b7-8ebb-50176d76e84f")
+		)
+		(pin "6"
+			(uuid "560df953-3dcd-4884-a873-78e8ff5e598d")
+		)
+		(pin "9"
+			(uuid "7da968df-9157-49c3-a25a-670f89aabb17")
+		)
+		(instances
+			(project ""
+				(path "/a7254994-6403-435e-b823-ccc6268898df"
+					(reference "U6")
+					(unit 4)
 				)
 			)
 		)
@@ -8999,6 +10529,110 @@
 				(path "/a7254994-6403-435e-b823-ccc6268898df"
 					(reference "#PWR05")
 					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "74xx:74HC14")
+		(at 133.35 45.72 0)
+		(unit 2)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "e2de1369-50cd-40dc-b958-1602015866cd")
+		(property "Reference" "U6"
+			(at 133.35 36.83 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "74HC14"
+			(at 133.35 39.37 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Package_DIP:DIP-14_W7.62mm_Socket"
+			(at 133.35 45.72 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "http://www.ti.com/lit/gpn/sn74HC14"
+			(at 133.35 45.72 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Hex inverter schmitt trigger"
+			(at 133.35 45.72 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "12"
+			(uuid "6fc3ba50-9c21-4b17-8630-3b4b74dd1868")
+		)
+		(pin "7"
+			(uuid "7365c2f7-05e1-46dc-ae7b-f2b01e5bde89")
+		)
+		(pin "3"
+			(uuid "cba15c2d-5b51-4d70-995b-21f01e24457c")
+		)
+		(pin "11"
+			(uuid "342329aa-f818-4474-8214-bd3254d8ee1e")
+		)
+		(pin "10"
+			(uuid "92d89017-6466-45fd-bf31-6d14d202fc45")
+		)
+		(pin "4"
+			(uuid "2e1ecb02-d1ff-499b-9153-5cd1b45c4f75")
+		)
+		(pin "5"
+			(uuid "7c7f0a2b-0ce2-4a8e-a196-26f14d50560f")
+		)
+		(pin "13"
+			(uuid "2d226bba-f019-487e-9cba-eade623dc086")
+		)
+		(pin "8"
+			(uuid "3b2aa9ec-b983-43cf-99ca-d6b62a364af2")
+		)
+		(pin "2"
+			(uuid "d8212532-20b9-4739-8eaa-b27cc388e246")
+		)
+		(pin "1"
+			(uuid "2e341c7b-9c80-4d94-aee2-326eaf4cdef4")
+		)
+		(pin "14"
+			(uuid "7244ad07-d5db-45b7-8ebb-50176d76e84f")
+		)
+		(pin "6"
+			(uuid "560df953-3dcd-4884-a873-78e8ff5e598d")
+		)
+		(pin "9"
+			(uuid "7da968df-9157-49c3-a25a-670f89aabb17")
+		)
+		(instances
+			(project ""
+				(path "/a7254994-6403-435e-b823-ccc6268898df"
+					(reference "U6")
+					(unit 2)
 				)
 			)
 		)
