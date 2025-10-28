@@ -6857,6 +6857,16 @@
 	)
 	(wire
 		(pts
+			(xy 269.24 31.75) (xy 269.24 38.1)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2733973b-d02f-4a8a-8b05-972c48d089cb")
+	)
+	(wire
+		(pts
 			(xy 276.86 96.52) (xy 279.4 96.52)
 		)
 		(stroke
@@ -8127,6 +8137,16 @@
 	)
 	(wire
 		(pts
+			(xy 190.5 45.72) (xy 191.77 45.72)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b2cee3cf-8eff-4ab9-8ca9-26c405f6e6e3")
+	)
+	(wire
+		(pts
 			(xy 34.29 138.43) (xy 34.29 143.51)
 		)
 		(stroke
@@ -8494,6 +8514,16 @@
 			(type default)
 		)
 		(uuid "d71cd263-18b6-4529-b256-cedaa196cc68")
+	)
+	(wire
+		(pts
+			(xy 191.77 45.72) (xy 191.77 53.34)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d832b804-7fde-4238-aed4-9a64b8a432b9")
 	)
 	(wire
 		(pts
@@ -12803,6 +12833,72 @@
 	)
 	(symbol
 		(lib_id "power:GND")
+		(at 269.24 38.1 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "8dde4a8b-5477-4b54-a8ba-e53d9816e42c")
+		(property "Reference" "#PWR028"
+			(at 269.24 44.45 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 269.24 43.18 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 269.24 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 269.24 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 269.24 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "3433d8c2-25b8-4bea-82e2-69afd0976bfc")
+		)
+		(instances
+			(project "teensyGpsDoV2"
+				(path "/a7254994-6403-435e-b823-ccc6268898df"
+					(reference "#PWR028")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
 		(at 74.93 55.88 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -15665,7 +15761,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Connector_PinSocket_2.54mm:PinSocket_1x03_P2.54mm_Vertical"
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical"
 			(at 223.52 111.76 0)
 			(effects
 				(font
@@ -15705,6 +15801,72 @@
 			(project "teensyGpsDoV2"
 				(path "/a7254994-6403-435e-b823-ccc6268898df"
 					(reference "SW1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 191.77 53.34 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "dccd4f19-cd08-41b1-8407-42c805652de7")
+		(property "Reference" "#PWR029"
+			(at 191.77 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 191.77 58.42 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 191.77 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 191.77 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 191.77 53.34 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "12ec633d-1e47-4e98-81bf-fc9ae7a9fe92")
+		)
+		(instances
+			(project "teensyGpsDoV2"
+				(path "/a7254994-6403-435e-b823-ccc6268898df"
+					(reference "#PWR029")
 					(unit 1)
 				)
 			)
