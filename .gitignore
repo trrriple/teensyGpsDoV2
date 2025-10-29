@@ -9,3 +9,4 @@ board/teensyGpsDoV2/~*
 board/teensyGpsDoV2/#*
 board/teensyGpsDoV2/_autosave*
 board/teensyGpsDoV2/fp-info-cache
+board/teensyGpsDoV2/gerbers
