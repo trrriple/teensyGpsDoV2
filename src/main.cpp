@@ -13,8 +13,8 @@
 // =====================================================================================================================
 // Options / Configuration
 // =====================================================================================================================
-// #define PWM_OSC_TUNE
-#define DAC_OSC_TUNE
+#define PWM_OSC_TUNE
+// #define DAC_OSC_TUNE
 
 #if (defined(PWM_OSC_TUNE) && defined(DAC_OSC_TUNE))
 #error Only select PWM_OSC_TUNE or DAC_OSC_TUNE not both
@@ -83,7 +83,7 @@ static bool    g_gsvComplete = false;
 #define OSC_TUNE_DAC_CS_PIN 10
 // DAC CLK is on Pin   13
 // DAC DAT is on Pin   11
-#define OSC_TUNE_PWM_PIN 5
+#define OSC_TUNE_PWM_PIN 3
 
 // =====================================================================================================================
 // DAC / Analog config
@@ -384,7 +384,7 @@ static inline void _tenMhzAvgPush(double count_hz)
 // =====================================================================================================================
 static bool _gnssMsgCurrent(uint32_t tMsg_ms)
 {
-    if(millis() - tMsg_ms < 1000)
+    if(millis() - tMsg_ms < 1100)
     {
         return true;
     }
@@ -458,6 +458,9 @@ void setup()
     {
         // wait for USB
     }
+
+    CONSOLE.printf("Teensy GPSDO! \r\n");
+
 
     pinMode(PPS_LED_PIN, OUTPUT);
     digitalWrite(PPS_LED_PIN, LOW);
@@ -699,12 +702,11 @@ static void _printUtcFromHhmmss(double hhmmss)
 static inline void _printUptimeStamp()
 {
     // Format: [D:HH:MM:SS.t]  (t = 100 ms ticks)
-    CONSOLE.printf("<%lu:%02u:%02u:%02u.%02u>",
+    CONSOLE.printf("<%lu:%02u:%02u:%02u>",
                    (unsigned long)g_uptime.day,
                    g_uptime.hr,
                    g_uptime.min,
-                   g_uptime.sec,
-                   g_uptime.tenms);
+                   g_uptime.sec);
 }
 
 /* _handleConsole — Once per second, print a compact, uniform status summary. */
