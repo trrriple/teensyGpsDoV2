@@ -200,8 +200,6 @@ struct GpsdoCtrl
     double dvFll_v_last      = 0.0;    // last FLL voltage term (V)
     double deltaVTotal_last  = 0.0;    // last combined PI+FLL command after slew (V)
     double lastStep_v        = 0.0;    // last DAC step actually applied (V)
-    bool   lastAllowApply    = false;  // last value of allowApply gate
-    bool   lastPpsGoodForAvg = false;  // last PPS-good-for-avg decision
     float  lastQErr_ns       = NAN;    // last TIM-TP qErr used by tuning
 };
 
@@ -801,7 +799,6 @@ static void _handleConsole(uint32_t tNow_ms)
 
     char goodPps_c   = g_gpsDoCtrl.goodPps ? 'Y' : 'N';
     char avgReady_c  = _tenMhzAvgReady() ? 'Y' : 'N';
-    char allow_c     = g_gpsDoCtrl.lastAllowApply ? 'Y' : 'N';
 
     // =================================================================
     // [TIME] — UTC + qErr + tAcc + PPS / avg status
@@ -985,14 +982,13 @@ static void _handleConsole(uint32_t tNow_ms)
     // Line 3: DAC behavior + long-term stats
     _printUptimeStamp();
     CONSOLE.printf(
-        "[OSC] dVtot=%.9f | step_v=%.9f | resid_v=%.9f | Vt=%.6f | lock=%d | apply=%c"
+        "[OSC] dVtot=%.9f | step_v=%.9f | resid_v=%.9f | Vt=%.6f | lock=%d"
         " | fA=%.6f | err_ppb=%.6f | rms_hz=%.6f\r\n",
         g_gpsDoCtrl.deltaVTotal_last,
         g_gpsDoCtrl.lastStep_v,
         g_gpsDoCtrl.fllResid_v,
         g_gpsDoCtrl.target_v,
         (g_gpsDoCtrl.locked ? 1 : 0),
-        allow_c,
         g_gpsDoCtrl.avg_hz,
         g_gpsDoCtrl.avgErr_ppb,
         g_gpsDoCtrl.rms_hz);
@@ -1056,10 +1052,9 @@ void _handleOscTuning(uint32_t tNow_ms)
     g_gpsDoCtrl.dCycles = (double)dCycles_raw - fracCycles;
 
     // 1a) Feed the averaging window **only when PPS is good**
-    const bool ppsGoodForAvg = haveQerr && (fabs((double)qErr_ns) <= g_gpsDoCtrl.qErrMax_ns);
-    g_gpsDoCtrl.lastPpsGoodForAvg = ppsGoodForAvg;
+    g_gpsDoCtrl.goodPps  = haveQerr && (fabs((double)qErr_ns) <= g_gpsDoCtrl.qErrMax_ns);
 
-    if (ppsGoodForAvg)
+    if ( g_gpsDoCtrl.goodPps )
     {
         const double est_hz = g_gpsDoCtrl.f0_hz + g_gpsDoCtrl.dCycles;  // includes fractional cycle via qErr
         _tenMhzAvgPush(est_hz);
@@ -1070,7 +1065,6 @@ void _handleOscTuning(uint32_t tNow_ms)
 
     // ---- Lock / TUNNEL ----
     g_gpsDoCtrl.haveAvg = _tenMhzAvgReady();
-    g_gpsDoCtrl.goodPps = ppsGoodForAvg;  // same quality gate as above
 
     // 3) PI — update integrator (always, but gains differ in lock vs unlock)
     g_gpsDoCtrl.integ += g_gpsDoCtrl.phaseErr_s;
@@ -1159,13 +1153,9 @@ void _handleOscTuning(uint32_t tNow_ms)
 
     g_gpsDoCtrl.deltaVTotal_last = deltaVoltsTotal_v;
 
-    // New allowApply: move DAC iff PPS is good (no special behavior for lock)
-    const bool allowApply = g_gpsDoCtrl.goodPps;
-    g_gpsDoCtrl.lastAllowApply = allowApply;
-
     g_gpsDoCtrl.lastStep_v = 0.0;  // default this cycle
 
-    if (allowApply)
+    if (g_gpsDoCtrl.goodPps)
     {
         // Accumulate sub-LSBs so they aren't lost (especially for tiny FLL trims)
         g_gpsDoCtrl.fllResid_v += deltaVoltsTotal_v;
