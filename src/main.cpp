@@ -1096,8 +1096,7 @@ void _handleOscTuning(uint32_t tNow_ms)
     }
 
     // Convert phase errors (s) to Hz corrections
-    const double effErrP_s = g_gpsDoCtrl.phaseErr_s;  // no longer muted in lock
-    g_gpsDoCtrl.p_hz       = -(Kp_use * effErrP_s * g_gpsDoCtrl.f0_hz);
+    g_gpsDoCtrl.p_hz       = -(Kp_use * g_gpsDoCtrl.phaseErr_s * g_gpsDoCtrl.f0_hz);
     g_gpsDoCtrl.i_hz       = -(Ki_use * g_gpsDoCtrl.integ * g_gpsDoCtrl.f0_hz);
 
     g_gpsDoCtrl.delta_hz = g_gpsDoCtrl.p_hz + g_gpsDoCtrl.i_hz;
