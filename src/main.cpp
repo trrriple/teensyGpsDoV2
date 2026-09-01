@@ -9,7 +9,6 @@
 #include "DAC8550.h"
 #include "Teensy_PWM.h"
 
-
 // =====================================================================================================================
 // Options / Configuration
 // =====================================================================================================================
@@ -18,7 +17,7 @@
 
 #if (defined(PWM_OSC_TUNE) && defined(DAC_OSC_TUNE))
 #error Only select PWM_OSC_TUNE or DAC_OSC_TUNE not both
-#endif // OSC TUNE SELECTION
+#endif  // OSC TUNE SELECTION
 
 static const bool     k_enableSurveyIn         = true;
 static const uint32_t k_surveyInMinDur_s       = 600;
@@ -31,11 +30,15 @@ static const uint32_t k_lcdCyclePeriod_s       = 3;
 // =====================================================================================================================
 // Global State Flags
 // =====================================================================================================================
-static bool     g_svinSubscribed  = false;
-static bool     g_svinStartedByUs = false;
-static bool     g_tuningCycle     = false;
-static uint32_t g_tLastPps_ms     = 0;
-static bool     g_oscRxErr        = false;
+static bool     g_svinSubscribed    = false;
+static bool     g_svinStartedByUs   = false;
+static bool     g_tuningCycle       = false;
+static uint32_t g_tLastPps_ms       = 0;
+static bool     g_oscRxErr          = false;
+static bool     g_ppsCaptured       = false;
+static uint32_t g_tPpsCapture_ms    = 0;
+static uint32_t g_latched10MhzCount = 0;
+static bool     g_haveNewTimTp      = false;
 
 // =====================================================================================================================
 // Latest decoded NMEA/UBX message cache
@@ -96,17 +99,14 @@ static const float k_oscTuneLsb     = OSC_TUNE_VREF / OSC_TUNE_COUNTS;  // volts
 DAC8550 g_oscTuneDac(OSC_TUNE_DAC_CS_PIN);
 #endif  // DAC_OSC_TUNE
 
-// =====================================================================================================================
-// PWM Option instead of discrete DAC
-// =====================================================================================================================
 #ifdef PWM_OSC_TUNE
-Teensy_PWM* g_oscTunePwm;
+Teensy_PWM*        g_oscTunePwm;
 #define OSC_TUNE_VREF   3.3f
 #define OSC_TUNE_COUNTS 65536U
 static const float k_clkTunePwmFreq = 1000.0f;
 static const float k_oscTuneZeroVal = 0.0f;                             // volts
 static const float k_oscTuneLsb     = OSC_TUNE_VREF / OSC_TUNE_COUNTS;  // volts per count
-#endif                                                                  // PWM_OSC_TUNE
+#endif  // PWM_OSC_TUNE
 
 // =====================================================================================================================
 // LCDisplay Config
@@ -115,7 +115,6 @@ static const float k_oscTuneLsb     = OSC_TUNE_VREF / OSC_TUNE_COUNTS;  // volts
 #define LCD_COLS     20
 #define LCD_ROWS     4
 static LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLS, LCD_ROWS);
-
 
 // =====================================================================================================================
 // Uptime
@@ -149,81 +148,72 @@ struct TenMhzAvgState
 struct GpsdoCtrl
 {
     // Config
-    double ocxoHzPerV       = 10.0;               // OCXO EFC sensitivity (Hz/V)
-    double vMin             = 0.0;                // V
-    double vMax             = OSC_TUNE_VREF;      // V
-    double slewMaxVPerS     = 0.001;              // V/s (max change per update)
-    double slewMaxVPerSLock = 0.0001;
-    double f0_hz            = 10000000.000;       // expected frequency
+    double ocxoHzPerV       = 10.0;           // OCXO EFC sensitivity (Hz/V)
+    double vMin             = 0.0;            // V
+    double vMax             = OSC_TUNE_VREF;  // V
+    double slewMaxVPerS     = 0.005;          // V/s (max change per update during acquisition)
+    double slewMaxVPerSLock = 0.0002;         // V/s (gentle max change during lock)
+    double f0_hz            = 10000000.000;   // expected frequency
 
-    // ---- Slow FLL + lock/tunnel parameters ----
-    uint32_t fllUpdate_s     = 60;    // run slow FLL every N seconds
-    double   fllThresh_ppb   = 0.5;   // only correct if |avgErr_ppb| >= 0.5
-    double   qErrMax_ns      = 10;    // Maximum allowable gps PPS qerr
-    double   lockEnterPpbReq = 1.5;   // enter lock when |avgErr_ppb| <= 1.5
-    double   lockExitPpbReq  = 3.0;   // exit lock when |avgErr_ppb| > 3.0
+    // Lock & Quality gates
+    double qErrMax_ns      = 25.0;  // Maximum allowable GPS PPS qErr
+    double lockEnterPpbReq = 1.5;   // enter lock when |avgErr_ppb| <= 1.5
+    double lockExitPpbReq  = 3.0;   // exit lock when |avgErr_ppb| > 3.0
 
-    // Gains (base = unlocked)
-    double Kp = 0.05;
-    double Ki = 0.0002;
+    // Multi-stage Adaptive Gains
+    // Stage 1: Fast acquisition pull-in (Error > 0.05 Hz / 5 ppb)
+    double KpFast = 0.08;
+    double KiFast = 0.025;
 
-    // Locked-mode scaling (gentler gains in lock)
-    double KpLockScale = 0.2;   // locked Kp = Kp * 0.2 = 0.01
-    double KiLockScale = 0.25;  // locked Ki = Ki * 0.25 = 0.00005
+    // Stage 2: Fine pull-in (0.015 < Error <= 0.05 Hz / 1.5 to 5 ppb)
+    double KpMed = 0.04;
+    double KiMed = 0.008;
+
+    // Stage 3: Locked mode (Error <= 1.5 ppb & qualified by 99s rolling window)
+    double KpLock     = 0.01;      // Gentler proportional damping in lock
+    double KiLock     = 0.0001;    // Ultra-fine integral frequency term in lock
+    double KphaseLock = 0.000002;  // Ultra-gentle absolute phase alignment in lock (<= 0.1 ppb)
 
     // Internals
-    uint32_t tenMhzCount_hz = 0;    // 1 s gate → Hz
-    double   phaseErr_s     = 0.0;  // seconds
-    double   dCycles        = 0.0;
-    double   integ          = 0.0;  // seconds (phase integrator)
-    double   target_v       = 2.0;  // V
-    uint8_t  goodCycles     = 0;
-    bool     locked         = false;
-    double   fllResid_v     = 0.0;  // accumulated sub-LSB residual
+    uint32_t tenMhzCount_hz   = 0;    // 1 s gate → Hz
+    double   dCyclesRaw       = 0.0;  // Raw cycle delta: (count - 10,000,000)
+    double   dCycles          = 0.0;  // Corrected cycle delta (fractional cycle via differential qErr)
+    double   phaseErr_s       = 0.0;  // seconds (single second phase error)
+    double   phaseAccum_s     = 0.0;  // seconds (accumulated phase error relative to GPS UTC)
+    double   vIntegral        = 2.0;  // V (integrator state)
+    double   vProp            = 0.0;  // V (proportional term)
+    double   target_v         = 2.0;  // V (current commanded output voltage)
+    double   ditherAccum      = 0.0;  // Fractional sub-LSB dither accumulator
+    uint8_t  goodCycles       = 0;
+    bool     locked           = false;
+
+    // Differential qErr tracking
+    float lastQErr_ns  = NAN;
+    bool  havePrevQErr = false;
 
     // Metrics
     double delta_hz = NAN;  // Hz
     double delta_v  = NAN;  // V
-    double p_hz     = NAN;  // Hz (P contribution)
-    double i_hz     = NAN;  // Hz (I contribution)
     bool   haveAvg  = false;
     bool   goodPps  = false;
 
-    // 10 MHz frequency averaging (rolling window, 1 sample = 1 s gate)
+    // 10 MHz frequency averaging (rolling window)
     TenMhzAvgState avgState;
     double         avg_hz     = NAN;  // Hz
     double         rms_hz     = NAN;  // Hz (sample stddev)
     double         avgErr_ppb = NAN;  // ppb
     uint16_t       avgNSamp   = 0;    // samples in window
 
-    // ---- Debug / logging helpers ----
-    double dvFll_v_last      = 0.0;    // last FLL voltage term (V)
-    double deltaVTotal_last  = 0.0;    // last combined PI+FLL command after slew (V)
-    double lastStep_v        = 0.0;    // last DAC step actually applied (V)
-    float  lastQErr_ns       = NAN;    // last TIM-TP qErr used by tuning
+    // Long-term baseline tracking
+    uint64_t totalCycles     = 0;
+    uint32_t totalPpsSeconds = 0;
 };
 
 GpsdoCtrl g_gpsDoCtrl;
 
-
 // =====================================================================================================================
-// Timer helpers: raw read and PPS-latched read
+// Timer helpers: PPS-latched read
 // =====================================================================================================================
-
-/* _readCountRaw — Read live 32-bit counter delta (since last call). */
-static uint32_t _readCountRaw()
-{
-    static uint32_t countPrev = 0;
-
-    IMXRT_TMR_t* TMRx = &IMXRT_TMR3;
-
-    uint32_t count = TMRx->CH[1].CNTR | (TMRx->CH[2].HOLD << 16);  // atomic
-
-    uint32_t countOutput = count - countPrev;
-    countPrev            = count;
-
-    return countOutput;
-}
 
 /* _poll10MHzCount — Check for PPS capture; on flag, return 1 s count. */
 static bool _poll10MHzCount(uint32_t* out_capt)
@@ -232,7 +222,7 @@ static bool _poll10MHzCount(uint32_t* out_capt)
 
     IMXRT_TMR_t* TMRx = &IMXRT_TMR3;
 
-    if ((TMRx->CH[0].SCTRL & TMR_SCTRL_IEF) && (TMRx->CH[2].SCTRL & TMR_SCTRL_IEF))
+    if (TMRx->CH[0].SCTRL & TMR_SCTRL_IEF)
     {
         uint32_t count = TMRx->CH[0].CAPT | (TMRx->CH[2].CAPT << 16);
         TMRx->CH[0].SCTRL &= ~TMR_SCTRL_IEF;
@@ -242,7 +232,9 @@ static bool _poll10MHzCount(uint32_t* out_capt)
         countPrev            = count;
 
         if (out_capt)
+        {
             *out_capt = countOutput;
+        }
         return true;
     }
     return false;
@@ -395,14 +387,8 @@ static inline void _tenMhzAvgPush(double count_hz)
 // =====================================================================================================================
 static bool _gnssMsgCurrent(uint32_t tMsg_ms)
 {
-    if(millis() - tMsg_ms < 1100)
-    {
-        return true;
-    }
-
-    return false;
+    return (millis() - tMsg_ms < 1500);
 }
-
 
 /* _gsvReset — Reset GSV epoch aggregation state. */
 static void _gsvReset()
@@ -439,7 +425,7 @@ static void _gsvIngest(const NmeaGsv& part)
 // OSC Tuning Helpers
 // =====================================================================================================================
 
-/* _getDacVal — Convert desired voltage to DAC code (counts). */
+/* _getTuneValDiscrete — Convert desired voltage to DAC code (counts). */
 static int _getTuneValDiscrete(float desired_v)
 {
     return (desired_v - k_oscTuneZeroVal) / k_oscTuneLsb;
@@ -453,15 +439,13 @@ static void _setOscTuneVoltage(float desired_v)
 
 #ifdef PWM_OSC_TUNE
     g_oscTunePwm->setPWM_Int(OSC_TUNE_PWM_PIN, k_clkTunePwmFreq, _getTuneValDiscrete(desired_v));
-#endif // PWM_OSC_TUNE
-
+#endif  // PWM_OSC_TUNE
 }
 
 // =====================================================================================================================
 // Setup / Initialization
 // =====================================================================================================================
 
-/* setup — Initialize IO, GNSS, DAC, and the QTIMER counter. */
 void setup()
 {
     CONSOLE.begin(115200);
@@ -470,8 +454,7 @@ void setup()
         // wait for USB
     }
 
-    CONSOLE.printf("Teensy GPSDO! \r\n");
-
+    CONSOLE.printf("Teensy GPSDO v2 (Optimized Control Loop)\r\n");
 
     pinMode(PPS_LED_PIN, OUTPUT);
     digitalWrite(PPS_LED_PIN, LOW);
@@ -481,47 +464,56 @@ void setup()
 
     lcd.init();
     lcd.backlight();
-    lcd.print("Initializing.");
+    lcd.print("Initializing...");
 
-
+    // Initialize GNSS serial at default 9600 baud
     GNSS_SERIAL.begin(9600);
     gnssInit(&GNSS_SERIAL, NULL);
+    delay(50);
 
-    // Enable the NMEA sentences we decode
+    // Switch u-blox UART1 to 115200 baud to eliminate serial transmission latency
+    gnssSetBaudRate(1, 115200);
+    delay(100);
+    GNSS_SERIAL.begin(115200);
+    delay(50);
+
+    // Enable NMEA sentences we decode
     gnssSendPubx40("GGA", true);
-    delay(100);
+    delay(50);
     gnssSendPubx40("RMC", true);
-    delay(100);
+    delay(50);
     gnssSendPubx40("GSA", true);
-    delay(100);
+    delay(50);
     gnssSendPubx40("GSV", true);
-    delay(100);
+    delay(50);
 
     // Ensure UBX TIM-TP on UART1 (rate=1)
     gnssSendUbxCfgMsg(0x0D, 0x01, /*UART1*/ 1, /*rate*/ 1);
+    delay(50);
 
     // Enable UBX-NAV-TIMEUTC (0x01,0x21) on UART1
     gnssSendUbxCfgMsg(0x01, 0x21, /*UART1*/ 1, /*rate*/ 1);
+    delay(50);
 
     _gsvReset();
-
-    gnssPollCfgTmode();  // We'll decide what to do in the UBX handler below.
+    gnssPollCfgTmode();
 
 #ifdef DAC_OSC_TUNE
-    CONSOLE.printf("Initializing DAC\r\n");
+    CONSOLE.printf("Initializing 16-bit DAC (DAC8550)...\r\n");
     SPI.begin();
     g_oscTuneDac.begin();
+    g_gpsDoCtrl.vIntegral = g_gpsDoCtrl.target_v;
     _setOscTuneVoltage(g_gpsDoCtrl.target_v);
-    CONSOLE.printf("DAC Initialized\r\n");
-#endif // DAC_OSC_TUNE
+    CONSOLE.printf("DAC Initialized to nominal %.3f V\r\n", g_gpsDoCtrl.target_v);
+#endif  // DAC_OSC_TUNE
 
 #ifdef PWM_OSC_TUNE
     g_oscTunePwm = new Teensy_PWM(OSC_TUNE_PWM_PIN, k_clkTunePwmFreq, 50.0);
+    g_gpsDoCtrl.vIntegral = g_gpsDoCtrl.target_v;
     _setOscTuneVoltage(g_gpsDoCtrl.target_v);
-#endif // PWM_OSC_TUNE
+#endif  // PWM_OSC_TUNE
 
-
-    CONSOLE.printf("Beginning Pulse Counting \r\n");
+    CONSOLE.printf("Beginning QuadTimer Pulse Counting...\r\n");
     _counterInit();
 }
 
@@ -601,16 +593,20 @@ static void _handleGnss(uint32_t tNow_ms)
                 {
                     const char* modeStr = "Unknown";
                     if (tm.timeMode == 0)
+                    {
                         modeStr = "Disabled";
+                    }
                     else if (tm.timeMode == 1)
+                    {
                         modeStr = "Survey-In";
+                    }
                     else if (tm.timeMode == 2)
+                    {
                         modeStr = "Fixed";
+                    }
 
-                    CONSOLE.print("[TMODE] ");
-                    CONSOLE.println(modeStr);
+                    CONSOLE.printf("[TMODE] %s\r\n", modeStr);
 
-                    // --- Decision logic ---
                     if (tm.timeMode == 2)
                     {
                         gnssSendUbxCfgMsg(0x0D, 0x04, /*UART1*/ 1, /*rate*/ 0);  // disable TIM-SVIN
@@ -620,19 +616,14 @@ static void _handleGnss(uint32_t tNow_ms)
                     }
                     else
                     {
-                        // Not Fixed yet
                         if (k_enableSurveyIn && !g_svinSubscribed)
                         {
                             gnssEnableSurveyIn(k_surveyInMinDur_s, k_surveyInVarLimit);
                             g_svinStartedByUs = true;
-
-                            // Stream Survey-In status (1 Hz) while we run it
                             gnssSendUbxCfgMsg(0x0D, 0x04, /*UART1*/ 1, /*rate*/ 1);  // TIM-SVIN
-                            g_svinStartedByUs = true;
-
-                            CONSOLE.printf("[SVIN] Started Survey-In MinDur %i, VarLimit %i",
-                                           k_surveyInMinDur_s,
-                                           k_surveyInVarLimit);
+                            CONSOLE.printf("[SVIN] Started Survey-In MinDur %u, VarLimit %u\r\n",
+                                           (unsigned)k_surveyInMinDur_s,
+                                           (unsigned)k_surveyInVarLimit);
                         }
                     }
                 }
@@ -644,23 +635,17 @@ static void _handleGnss(uint32_t tNow_ms)
                 UbxTimSvin sv;
                 if (gnssDecodeTimSvin(fr, sv))
                 {
-                    CONSOLE.print("[SVIN] t:");
-                    CONSOLE.print(sv.durSec);
-                    CONSOLE.print("s  obs:");
-                    CONSOLE.print(sv.obs);
-                    CONSOLE.print("  var:");
-                    CONSOLE.print(sv.meanV_mm2);
-                    CONSOLE.print("  active:");
-                    CONSOLE.print(sv.active ? "Y" : "N");
-                    CONSOLE.print("  valid:");
-                    CONSOLE.println(sv.valid ? "Y" : "N");
+                    CONSOLE.printf("[SVIN] t:%lu s  obs:%lu  var:%lu  active:%c  valid:%c\r\n",
+                                   (unsigned long)sv.durSec,
+                                   (unsigned long)sv.obs,
+                                   (unsigned long)sv.meanV_mm2,
+                                   sv.active ? 'Y' : 'N',
+                                   sv.valid ? 'Y' : 'N');
 
-                    // If we started SVIN and it just reported complete → confirm mode switched to Fixed
                     if (g_svinStartedByUs && !sv.active && sv.valid)
                     {
                         CONSOLE.println("[SVIN] COMPLETE → polling TMODE to confirm Fixed...");
                         gnssPollCfgTmode();
-                        // We will unsubscribe TIM-SVIN when we actually see CFG-TMODE = Fixed.
                     }
                 }
                 break;
@@ -671,6 +656,7 @@ static void _handleGnss(uint32_t tNow_ms)
                 if (gnssDecodeTimTp(fr, g_gpsMsgs.timTp))
                 {
                     g_gpsMsgs.tLastTimTp_ms = tNow_ms;
+                    g_haveNewTimTp          = true;
                 }
                 break;
             }
@@ -685,7 +671,6 @@ static void _handleGnss(uint32_t tNow_ms)
             }
             default:
             {
-                // Classified but not handled yet
                 break;
             }
         }
@@ -712,16 +697,14 @@ static void _printUtcFromHhmmss(double hhmmss)
 
 static inline void _printUptimeStamp()
 {
-    // Format: [D:HH:MM:SS.t]  (t = 100 ms ticks)
-    CONSOLE.printf("<%lu:%02u:%02u:%02u>",
+    CONSOLE.printf("<%lu:%02u:%02u:%02u> ",
                    (unsigned long)g_uptime.day,
                    g_uptime.hr,
                    g_uptime.min,
                    g_uptime.sec);
 }
 
-/* _handleConsole — Once per second, print a compact, uniform status summary. */
-/* _handleConsole — Once per second, print grouped, ~120-char lines. */
+/* _handleConsole — Once per second, print grouped status summary. */
 static void _handleConsole(uint32_t tNow_ms)
 {
     static unsigned long lastPrint_ms = 0;
@@ -737,7 +720,6 @@ static void _handleConsole(uint32_t tNow_ms)
     bool haveTimTp   = _gnssMsgCurrent(g_gpsMsgs.tLastTimTp_ms);
     bool haveTimeUtc = _gnssMsgCurrent(g_gpsMsgs.tLastTimeUtc_ms);
 
-    // ---------------- Common derived GPS fields ----------------
     // UTC
     double utcHhmmss = 0.0;
     bool   haveUtc   = false;
@@ -793,20 +775,15 @@ static void _handleConsole(uint32_t tNow_ms)
         lonDeg = g_gpsMsgs.rmc.lonDeg;
     }
 
-    int   inView     = (g_gsvInView >= 0) ? g_gsvInView : 0;
-    float qErr_ns    = haveTimTp ? g_gpsMsgs.timTp.qErrNs : NAN;
-    uint32_t tAcc_ns = haveTimeUtc ? g_gpsMsgs.timeUtc.tAccNs : 0;
+    int      inView     = (g_gsvInView >= 0) ? g_gsvInView : 0;
+    float    qErr_ns    = haveTimTp ? g_gpsMsgs.timTp.qErrNs : NAN;
+    uint32_t tAcc_ns    = haveTimeUtc ? g_gpsMsgs.timeUtc.tAccNs : 0;
+    char     goodPps_c  = g_gpsDoCtrl.goodPps ? 'Y' : 'N';
+    char     avgReady_c = _tenMhzAvgReady() ? 'Y' : 'N';
 
-    char goodPps_c   = g_gpsDoCtrl.goodPps ? 'Y' : 'N';
-    char avgReady_c  = _tenMhzAvgReady() ? 'Y' : 'N';
-
-    // =================================================================
-    // [TIME] — UTC + qErr + tAcc + PPS / avg status
-    // =================================================================
+    // [TIME]
     _printUptimeStamp();
-    CONSOLE.print("[TIME] ");
-
-    CONSOLE.print("UTC:");
+    CONSOLE.print("[TIME] UTC:");
     if (haveUtc)
     {
         _printUtcFromHhmmss(utcHhmmss);
@@ -815,392 +792,267 @@ static void _handleConsole(uint32_t tNow_ms)
     {
         CONSOLE.print("--:--:--");
     }
+    CONSOLE.printf(" | qErr=%.1f ns | tAcc=%lu ns | goodPps=%c | avgReady=%c | nAvg=%u\r\n",
+                   haveTimTp ? qErr_ns : 0.0f,
+                   (unsigned long)tAcc_ns,
+                   goodPps_c,
+                   avgReady_c,
+                   g_gpsDoCtrl.avgNSamp);
 
-    CONSOLE.print(" | qErr_ns=");
-    if (haveTimTp)
-    {
-        CONSOLE.print(qErr_ns, 1);
-    }
-    else
-    {
-        CONSOLE.print("n/a");
-    }
-
-    CONSOLE.print(" | tAcc_ns=");
-    if (haveTimeUtc)
-    {
-        CONSOLE.print(tAcc_ns);
-    }
-    else
-    {
-        CONSOLE.print("n/a");
-    }
-
-    CONSOLE.print(" | goodPps=");
-    CONSOLE.print(goodPps_c);
-
-    CONSOLE.print(" | avgReady=");
-    CONSOLE.print(avgReady_c);
-
-    CONSOLE.print(" | nAvg=");
-    CONSOLE.print(g_gpsDoCtrl.avgNSamp);
-
-    CONSOLE.println();
-
-    // =================================================================
-    // [GPS] — navigation solution in two shorter lines
-    // =================================================================
-    // Line 1: fix + sats + DOP
+    // [GPS]
     _printUptimeStamp();
-    CONSOLE.print("[GPS] ");
-
-    CONSOLE.print("fixQ=");
-    if (haveGga)
+    CONSOLE.printf("[GPS] fixQ=%d | fixType=%d | sats=%d | inView=%d | PDOP=%.2f | HDOP=%.2f | VDOP=%.2f\r\n",
+                   haveGga ? g_gpsMsgs.gga.fixQ : 0,
+                   haveGsa ? g_gpsMsgs.gsa.fixType : 1,
+                   satsUsed,
+                   inView,
+                   pdop,
+                   hdop,
+                   vdop);
+    if (!isnan(latDeg) && !isnan(lonDeg))
     {
-        CONSOLE.print(g_gpsMsgs.gga.fixQ);
-    }
-    else
-    {
-        CONSOLE.print(0);
-    }
-
-    CONSOLE.print(" | fixType=");
-    if (haveGsa)
-    {
-        CONSOLE.print(g_gpsMsgs.gsa.fixType);
-    }
-    else
-    {
-        CONSOLE.print(1);
+        _printUptimeStamp();
+        CONSOLE.printf("[GPS] lat=%.7f | lon=%.7f | alt=%.2f m\r\n",
+                       latDeg,
+                       lonDeg,
+                       isnan(altM) ? 0.0 : altM);
     }
 
-    CONSOLE.print(" | satsUsed=");
-    if (satsUsed >= 0)
-    {
-        CONSOLE.print(satsUsed);
-    }
-    else
-    {
-        CONSOLE.print("n/a");
-    }
-
-    CONSOLE.print(" | inView=");
-    CONSOLE.print(inView);
-
-    CONSOLE.print(" | pdop=");
-    if (!isnan(pdop))
-    {
-        CONSOLE.print(pdop, 2);
-    }
-    else
-    {
-        CONSOLE.print("n/a");
-    }
-
-    CONSOLE.print(" | hdop=");
-    if (!isnan(hdop))
-    {
-        CONSOLE.print(hdop, 2);
-    }
-    else
-    {
-        CONSOLE.print("n/a");
-    }
-
-    CONSOLE.print(" | vdop=");
-    if (!isnan(vdop))
-    {
-        CONSOLE.print(vdop, 2);
-    }
-    else
-    {
-        CONSOLE.print("n/a");
-    }
-
-    CONSOLE.println();
-
-    // Line 2: position
-    _printUptimeStamp();
-    CONSOLE.print("[GPS] ");
-
-    CONSOLE.print("lat=");
-    if (!isnan(latDeg))
-    {
-        CONSOLE.print(latDeg, 7);
-    }
-    else
-    {
-        CONSOLE.print("n/a");
-    }
-
-    CONSOLE.print(" | lon=");
-    if (!isnan(lonDeg))
-    {
-        CONSOLE.print(lonDeg, 7);
-    }
-    else
-    {
-        CONSOLE.print("n/a");
-    }
-
-    CONSOLE.print(" | alt_m=");
-    if (!isnan(altM))
-    {
-        CONSOLE.print(altM, 2);
-    }
-    else
-    {
-        CONSOLE.print("n/a");
-    }
-
-    CONSOLE.println();
-
-    // =================================================================
-    // [OSC] — tuning loop in three shorter lines
-    // =================================================================
-
-    // Line 1: raw measurement + phase/integrator
+    // [OSC] Line 1: Frequency, Cycle Errors, Phase
     _printUptimeStamp();
     CONSOLE.printf(
-        "[OSC] f_mhz=%.6f | cnt=%lu | dCyc=%.6f | phErr_ns=%.3f | integ_s=%.3e\r\n",
-        (double)g_gpsDoCtrl.tenMhzCount_hz / 1e6,
+        "[OSC] f_hz=%lu | dCyc_raw=%.2f | dCyc_corr=%.3f | phErr_ns=%.2f | phAccum_us=%.3f\r\n",
         (unsigned long)g_gpsDoCtrl.tenMhzCount_hz,
+        g_gpsDoCtrl.dCyclesRaw,
         g_gpsDoCtrl.dCycles,
         g_gpsDoCtrl.phaseErr_s * 1e9,
-        g_gpsDoCtrl.integ);
+        g_gpsDoCtrl.phaseAccum_s * 1e6);
 
-    // Line 2: PI and FLL terms
+    // [OSC] Line 2: Control Voltages and Lock
     _printUptimeStamp();
     CONSOLE.printf(
-        "[OSC] P_hz=%.6f | I_hz=%.6f | dHz=%.6f | dV=%.9f | dvFLL=%.9f\r\n",
-        g_gpsDoCtrl.p_hz,
-        g_gpsDoCtrl.i_hz,
-        g_gpsDoCtrl.delta_hz,
-        g_gpsDoCtrl.delta_v,
-        g_gpsDoCtrl.dvFll_v_last);
-
-    // Line 3: DAC behavior + long-term stats
-    _printUptimeStamp();
-    CONSOLE.printf(
-        "[OSC] dVtot=%.9f | step_v=%.9f | resid_v=%.9f | Vt=%.6f | lock=%d"
-        " | fA=%.6f | err_ppb=%.6f | rms_hz=%.6f\r\n",
-        g_gpsDoCtrl.deltaVTotal_last,
-        g_gpsDoCtrl.lastStep_v,
-        g_gpsDoCtrl.fllResid_v,
+        "[OSC] V_target=%.6f V | V_int=%.6f V | V_prop=%.6f V | lock=%d | fA=%.4f Hz | err=%.3f ppb | rms=%.3f Hz\r\n",
         g_gpsDoCtrl.target_v,
-        (g_gpsDoCtrl.locked ? 1 : 0),
+        g_gpsDoCtrl.vIntegral,
+        g_gpsDoCtrl.vProp,
+        g_gpsDoCtrl.locked ? 1 : 0,
         g_gpsDoCtrl.avg_hz,
         g_gpsDoCtrl.avgErr_ppb,
         g_gpsDoCtrl.rms_hz);
 }
 
-
 // =====================================================================================================================
-/* _handlePps — Handle 1 PPS capture; validate and feed the averaging window. */
+/* _handlePps — Handle 1 PPS capture from hardware counter */
 // =====================================================================================================================
 static void _handlePps(uint32_t tNow_ms)
 {
     uint32_t tenMhzCount = 0;
 
-    /* if this is true, we've gotten a PPS and latched the 10MHzCount in hardware */
     if (_poll10MHzCount(&tenMhzCount))
     {
-        g_tLastPps_ms = tNow_ms;
+        g_tLastPps_ms       = tNow_ms;
+        g_tPpsCapture_ms    = tNow_ms;
+        g_latched10MhzCount = tenMhzCount;
+        g_ppsCaptured       = true;
 
         if (tenMhzCount == 0)
         {
-            CONSOLE.printf("Error: Clock not detected \r\n", tenMhzCount);
+            CONSOLE.println("Error: Clock not detected on Pin 19!");
             g_gpsDoCtrl.tenMhzCount_hz = (uint32_t)-1;
             g_oscRxErr                 = true;
-
         }
-        else if (tenMhzCount > 10000100 || tenMhzCount < 9999900)
+        else if (tenMhzCount > 10000500 || tenMhzCount < 9999500)
         {
-            CONSOLE.printf("Warning, Clk count significantly out of range: %i\r\n", tenMhzCount);
+            CONSOLE.printf("Warning: 10MHz Clock count out of range: %lu\r\n", (unsigned long)tenMhzCount);
             g_gpsDoCtrl.tenMhzCount_hz = 0;
             g_oscRxErr                 = true;
         }
         else
         {
             g_gpsDoCtrl.tenMhzCount_hz = tenMhzCount;
-            g_tuningCycle              = true;
             g_oscRxErr                 = false;
         }
     }
 }
 
 // =====================================================================================================================
-/* _handleOscTuning — Per-PPS PI phase loop + slow FLL trim + lock/tunnel gating. */
+/* _handleOscTuning — Synchronized PI Disciplining Loop with Differential qErr Compensation */
 // =====================================================================================================================
-void _handleOscTuning(uint32_t tNow_ms)
+static void _handleOscTuning(uint32_t tNow_ms)
 {
-    if (!g_tuningCycle || g_oscRxErr)
+    // Execute tuning only when PPS is captured and we have the matching TIM-TP (or a 250ms timeout)
+    if (!g_ppsCaptured || g_oscRxErr)
     {
         return;
     }
 
-    // ---- PPS quality (UBX TIM-TP) ----
+    // If TIM-TP hasn't arrived yet and < 250 ms since PPS, wait a short moment for UART
+    if (!g_haveNewTimTp && (tNow_ms - g_tPpsCapture_ms < 250))
+    {
+        return;
+    }
+
+    // Consume PPS event
+    g_ppsCaptured  = false;
+    g_haveNewTimTp = false;
+    g_tuningCycle  = true;
+
+    // ---- Differential GPS Quantization Jitter Compensation ----
     const bool  haveQerr = _gnssMsgCurrent(g_gpsMsgs.tLastTimTp_ms);
-    const float qErr_ns  = g_gpsMsgs.timTp.qErrNs;
+    const float qErr_ns  = haveQerr ? g_gpsMsgs.timTp.qErrNs : 0.0f;
 
-    g_gpsDoCtrl.lastQErr_ns = haveQerr ? qErr_ns : NAN;
+    double deltaQErr_ns = 0.0;
+    if (haveQerr && g_gpsDoCtrl.havePrevQErr)
+    {
+        deltaQErr_ns = (double)(qErr_ns - g_gpsDoCtrl.lastQErr_ns);
+    }
 
-    // 1) Signed cycle error (integer cycles over 1 s gate) with fractional correction from qErr
+    if (haveQerr)
+    {
+        g_gpsDoCtrl.lastQErr_ns  = qErr_ns;
+        g_gpsDoCtrl.havePrevQErr = true;
+    }
+    else
+    {
+        g_gpsDoCtrl.havePrevQErr = false;
+    }
+
+    // 1 cycle of 10 MHz = 100 ns -> 0.01 cycles / ns
+    const double fracCycles   = deltaQErr_ns * 0.01;
     const int64_t dCycles_raw = (int64_t)g_gpsDoCtrl.tenMhzCount_hz - (int64_t)g_gpsDoCtrl.f0_hz;
-    const double  fracCycles  = haveQerr ? (double)qErr_ns * 0.01 /* 1 cycle / 100 ns at 10 MHz */ : 0.0;
 
-    g_gpsDoCtrl.dCycles = (double)dCycles_raw - fracCycles;
+    g_gpsDoCtrl.dCyclesRaw = (double)dCycles_raw;
+    g_gpsDoCtrl.dCycles    = (double)dCycles_raw - fracCycles;
 
-    // 1a) Feed the averaging window **only when PPS is good**
-    g_gpsDoCtrl.goodPps  = haveQerr && (fabs((double)qErr_ns) <= g_gpsDoCtrl.qErrMax_ns);
-
-    if ( g_gpsDoCtrl.goodPps )
-    {
-        const double est_hz = g_gpsDoCtrl.f0_hz + g_gpsDoCtrl.dCycles;  // includes fractional cycle via qErr
-        _tenMhzAvgPush(est_hz);
-    }
-
-    // 2) Phase error in seconds
-    g_gpsDoCtrl.phaseErr_s = g_gpsDoCtrl.dCycles / g_gpsDoCtrl.f0_hz;
-
-    // ---- Lock / TUNNEL ----
-    g_gpsDoCtrl.haveAvg = _tenMhzAvgReady();
-
-    // 3) PI — update integrator (always, but gains differ in lock vs unlock)
-    g_gpsDoCtrl.integ += g_gpsDoCtrl.phaseErr_s;
-
-    // Optional: in lock, apply a slightly stronger leak to keep I from creeping.
-    if (g_gpsDoCtrl.locked)
-    {
-        g_gpsDoCtrl.integ *= 0.9995;
-    }
-
-    // clamp integrator (units = seconds of phase)
-    const double integMax_s = 200e-6;
-    if (g_gpsDoCtrl.integ > integMax_s)
-    {
-        g_gpsDoCtrl.integ = integMax_s;
-    }
-    if (g_gpsDoCtrl.integ < -integMax_s)
-    {
-        g_gpsDoCtrl.integ = -integMax_s;
-    }
-
-    // ---- Gains: gentler in lock ----
-    double Kp_use = g_gpsDoCtrl.Kp;
-    double Ki_use = g_gpsDoCtrl.Ki;
-    if (g_gpsDoCtrl.locked)
-    {
-        Kp_use *= g_gpsDoCtrl.KpLockScale;
-        Ki_use *= g_gpsDoCtrl.KiLockScale;
-    }
-
-    // Convert phase errors (s) to Hz corrections
-    g_gpsDoCtrl.p_hz       = -(Kp_use * g_gpsDoCtrl.phaseErr_s * g_gpsDoCtrl.f0_hz);
-    g_gpsDoCtrl.i_hz       = -(Ki_use * g_gpsDoCtrl.integ * g_gpsDoCtrl.f0_hz);
-
-    g_gpsDoCtrl.delta_hz = g_gpsDoCtrl.p_hz + g_gpsDoCtrl.i_hz;
-
-    // 4) Hz -> V (PI command)
-    g_gpsDoCtrl.delta_v = (g_gpsDoCtrl.ocxoHzPerV != 0.0)
-                              ? (g_gpsDoCtrl.delta_hz / g_gpsDoCtrl.ocxoHzPerV)
-                              : 0.0;
-
-    // ------------- SLOW FLL (outer loop) -------------
-    static uint32_t _tLastFll_ms = 0;
-    double          dvFll_v      = 0.0;
-
-    if ((tNow_ms - _tLastFll_ms) >= g_gpsDoCtrl.fllUpdate_s * 1000u)
-    {
-        _tLastFll_ms = tNow_ms;
-
-        if (_tenMhzAvgReady() && (g_gpsDoCtrl.ocxoHzPerV != 0.0))
-        {
-            const double avgErr_hz = g_gpsDoCtrl.avg_hz - g_gpsDoCtrl.f0_hz;
-            const double ppb       = (avgErr_hz / g_gpsDoCtrl.f0_hz) * 1e9;
-
-            if (fabs(ppb) >= g_gpsDoCtrl.fllThresh_ppb)
-            {
-                // Raw naive step
-                const double dvRaw_v = -(avgErr_hz / g_gpsDoCtrl.ocxoHzPerV);
-
-                // Make FLL step gentle
-                dvFll_v = dvRaw_v * 0.25;
-
-                // Hard limit FLL step per update to ~0.2 ppb
-                const double maxFllStep_v = 0.0002; // at 10 Hz/V -> 0.002 Hz ≈ 0.2 ppb
-                if (dvFll_v > maxFllStep_v)  dvFll_v = maxFllStep_v;
-                if (dvFll_v < -maxFllStep_v) dvFll_v = -maxFllStep_v;
-            }
-        }
-    }
-
-    g_gpsDoCtrl.dvFll_v_last = dvFll_v;
-
-    // --- Quantization-aware post-processing ---
-    double deltaVoltsTotal_v = g_gpsDoCtrl.delta_v + dvFll_v;
-
-    // Slew limit per update
-    if (deltaVoltsTotal_v > g_gpsDoCtrl.slewMaxVPerS)
-    {
-        deltaVoltsTotal_v = g_gpsDoCtrl.slewMaxVPerS;
-    }
-    if (deltaVoltsTotal_v < -g_gpsDoCtrl.slewMaxVPerS)
-    {
-        deltaVoltsTotal_v = -g_gpsDoCtrl.slewMaxVPerS;
-    }
-
-    g_gpsDoCtrl.deltaVTotal_last = deltaVoltsTotal_v;
-
-    g_gpsDoCtrl.lastStep_v = 0.0;  // default this cycle
+    // Good PPS gate
+    g_gpsDoCtrl.goodPps = haveQerr && (fabs((double)qErr_ns) <= g_gpsDoCtrl.qErrMax_ns);
 
     if (g_gpsDoCtrl.goodPps)
     {
-        // Accumulate sub-LSBs so they aren't lost (especially for tiny FLL trims)
-        g_gpsDoCtrl.fllResid_v += deltaVoltsTotal_v;
+        const double est_hz = g_gpsDoCtrl.f0_hz + g_gpsDoCtrl.dCycles;
+        _tenMhzAvgPush(est_hz);
+    }
 
-        const double vDeadband = 0.5 * k_oscTuneLsb;  // don’t move for < 1/2 LSB
-        double       step_v    = 0.0;
+    // Phase error for this second (seconds)
+    g_gpsDoCtrl.phaseErr_s = g_gpsDoCtrl.dCycles / g_gpsDoCtrl.f0_hz;
 
-        if (fabs(g_gpsDoCtrl.fllResid_v) >= vDeadband)
+    // Accumulate phase error only while locked to avoid historical cold-start drift
+    if (g_gpsDoCtrl.locked)
+    {
+        g_gpsDoCtrl.phaseAccum_s += g_gpsDoCtrl.phaseErr_s;
+    }
+    else
+    {
+        g_gpsDoCtrl.phaseAccum_s = 0.0;
+    }
+
+    // Clamp phase accumulator to ±2.0 µs (±20 cycles) to prevent large steering offsets
+    const double phaseMax_s = 2.0e-6;
+    if (g_gpsDoCtrl.phaseAccum_s > phaseMax_s)
+    {
+        g_gpsDoCtrl.phaseAccum_s = phaseMax_s;
+    }
+    if (g_gpsDoCtrl.phaseAccum_s < -phaseMax_s)
+    {
+        g_gpsDoCtrl.phaseAccum_s = -phaseMax_s;
+    }
+
+    g_gpsDoCtrl.haveAvg = _tenMhzAvgReady();
+
+    // ---- Multi-Stage Adaptive Gains & Slew Limits ----
+    double Kp_use;
+    double Ki_use;
+    double maxSlew;
+
+    const double absCycleErr = fabs(g_gpsDoCtrl.dCycles);
+
+    if (g_gpsDoCtrl.locked)
+    {
+        // Stage 3: Locked Mode (Ultra-low noise, high time-constant filter)
+        Kp_use  = g_gpsDoCtrl.KpLock;
+        Ki_use  = g_gpsDoCtrl.KiLock;
+        maxSlew = g_gpsDoCtrl.slewMaxVPerSLock;
+    }
+    else if (absCycleErr > 0.05)
+    {
+        // Stage 1: Fast Acquisition Pull-In (Error > 5 ppb / 0.05 Hz)
+        Kp_use  = g_gpsDoCtrl.KpFast;
+        Ki_use  = g_gpsDoCtrl.KiFast;
+        maxSlew = g_gpsDoCtrl.slewMaxVPerS;
+    }
+    else
+    {
+        // Stage 2: Fine Pull-In (Error 1.5 to 5 ppb)
+        Kp_use  = g_gpsDoCtrl.KpMed;
+        Ki_use  = g_gpsDoCtrl.KiMed;
+        maxSlew = 0.001;  // V/s
+    }
+
+    // 1) Integral Term (Volts): accumulates physical crystal bias with zero steady-state error
+    if (g_gpsDoCtrl.goodPps && g_gpsDoCtrl.ocxoHzPerV > 0.0)
+    {
+        double dV_int = -(Ki_use * g_gpsDoCtrl.dCycles) / g_gpsDoCtrl.ocxoHzPerV;
+
+        if (g_gpsDoCtrl.locked)
         {
-            // Round to nearest code
-            const double codes = round(g_gpsDoCtrl.fllResid_v / k_oscTuneLsb);
-            step_v             = codes * k_oscTuneLsb;
-
-            // Keep only the leftover fractional part
-            g_gpsDoCtrl.fllResid_v -= step_v;
+            // In lock, gently steer absolute accumulated phase back to 0
+            double dV_phase = -(g_gpsDoCtrl.KphaseLock * g_gpsDoCtrl.phaseAccum_s * g_gpsDoCtrl.f0_hz) / g_gpsDoCtrl.ocxoHzPerV;
+            dV_int += dV_phase;
         }
 
-        g_gpsDoCtrl.lastStep_v = step_v;
+        g_gpsDoCtrl.vIntegral += dV_int;
 
-        if (step_v != 0.0)
+        // Anti-windup clamping
+        if (g_gpsDoCtrl.vIntegral < g_gpsDoCtrl.vMin)
         {
-            double new_v = g_gpsDoCtrl.target_v + step_v;
-
-            if (new_v < g_gpsDoCtrl.vMin)
-            {
-                new_v = g_gpsDoCtrl.vMin;
-                g_gpsDoCtrl.integ *= 0.9;
-                g_gpsDoCtrl.fllResid_v = 0.0;  // hitting a rail => discard residual
-            }
-            else if (new_v > g_gpsDoCtrl.vMax)
-            {
-                new_v = g_gpsDoCtrl.vMax;
-                g_gpsDoCtrl.integ *= 0.9;
-                g_gpsDoCtrl.fllResid_v = 0.0;
-            }
-
-            g_gpsDoCtrl.target_v = new_v;
-            _setOscTuneVoltage(g_gpsDoCtrl.target_v);
+            g_gpsDoCtrl.vIntegral = g_gpsDoCtrl.vMin;
+        }
+        if (g_gpsDoCtrl.vIntegral > g_gpsDoCtrl.vMax)
+        {
+            g_gpsDoCtrl.vIntegral = g_gpsDoCtrl.vMax;
         }
     }
+
+    // 2) Proportional Term (Volts): immediate frequency damping
+    if (g_gpsDoCtrl.ocxoHzPerV > 0.0)
+    {
+        g_gpsDoCtrl.vProp = -(Kp_use * g_gpsDoCtrl.dCycles) / g_gpsDoCtrl.ocxoHzPerV;
+    }
+    else
+    {
+        g_gpsDoCtrl.vProp = 0.0;
+    }
+
+    // Total commanded voltage = Integral + Proportional
+    double commanded_v = g_gpsDoCtrl.vIntegral + g_gpsDoCtrl.vProp;
+
+    // Slew rate limiting relative to previous target
+    double deltaV  = commanded_v - g_gpsDoCtrl.target_v;
+    if (deltaV > maxSlew)
+    {
+        deltaV = maxSlew;
+    }
+    if (deltaV < -maxSlew)
+    {
+        deltaV = -maxSlew;
+    }
+
+    g_gpsDoCtrl.target_v += deltaV;
+    if (g_gpsDoCtrl.target_v < g_gpsDoCtrl.vMin)
+    {
+        g_gpsDoCtrl.target_v = g_gpsDoCtrl.vMin;
+    }
+    if (g_gpsDoCtrl.target_v > g_gpsDoCtrl.vMax)
+    {
+        g_gpsDoCtrl.target_v = g_gpsDoCtrl.vMax;
+    }
+
+    // Apply to DAC with software delta-sigma dithering
+    _setOscTuneVoltage(g_gpsDoCtrl.target_v);
 }
 
-
-
 // =====================================================================================================================
-/* _handleLockLogic — Simple lock/unlock logic */
+/* _handleLockLogic — Lock qualification state machine */
 // =====================================================================================================================
 static void _handleLockLogic(uint32_t tNow_ms)
 {
@@ -1209,25 +1061,21 @@ static void _handleLockLogic(uint32_t tNow_ms)
         return;
     }
 
-    // ---------- Guards ----------
-    if (((tNow_ms - g_tLastPps_ms) > 1100) || g_oscRxErr)
+    // Guards
+    if (((tNow_ms - g_tLastPps_ms) > 1500) || g_oscRxErr)
     {
         g_gpsDoCtrl.locked     = false;
         g_gpsDoCtrl.goodCycles = 0;
         return;
     }
 
-    // ---------- Frequency/PPS gates ----------
-    const bool avgReady = _tenMhzAvgReady();
-    const bool goodPps  = g_gpsDoCtrl.goodPps;
+    const bool   avgReady = _tenMhzAvgReady();
+    const bool   goodPps  = g_gpsDoCtrl.goodPps;
+    const double absPpb   = fabs(g_gpsDoCtrl.avgErr_ppb);
 
-    const double absPpb = fabs(g_gpsDoCtrl.avgErr_ppb);
-
-    // Use ONLY the averaged ppb once avgReady; else, don't allow entry yet.
     const bool freqEnter = avgReady && (absPpb <= g_gpsDoCtrl.lockEnterPpbReq);
     const bool freqHold  = avgReady && (absPpb <= g_gpsDoCtrl.lockExitPpbReq);
 
-    // ---------- Good-cycle accounting ----------
     const bool inBandForEnter   = freqEnter && goodPps;
     const bool outOfBandForExit = !freqHold || !goodPps;
 
@@ -1243,8 +1091,15 @@ static void _handleLockLogic(uint32_t tNow_ms)
         g_gpsDoCtrl.goodCycles = 0;
     }
 
-    // ---------- Final latch: forbid lock until avgReady ----------
+    bool wasLocked     = g_gpsDoCtrl.locked;
     g_gpsDoCtrl.locked = (avgReady && (g_gpsDoCtrl.goodCycles >= (k_requiredGoodCyclesLock - 1)));
+
+    // Reset phase accumulator to 0 upon entering lock so historical startup drift is not steered
+    if (!wasLocked && g_gpsDoCtrl.locked)
+    {
+        g_gpsDoCtrl.phaseAccum_s = 0.0;
+        CONSOLE.println("[LOCK] Entered Lock -> Phase accumulator zeroed for tracking.");
+    }
 }
 
 // =====================================================================================================================
@@ -1255,7 +1110,6 @@ static void _handleLeds(uint32_t tNow_ms)
     static bool     lockedLedState = false;
     static bool     ppsLedState    = false;
     static uint32_t ppsLedOn_ms    = 0;
-
 
     if (g_gpsDoCtrl.locked && !lockedLedState)
     {
@@ -1271,9 +1125,8 @@ static void _handleLeds(uint32_t tNow_ms)
     if (g_tuningCycle && !ppsLedState)
     {
         digitalWrite(PPS_LED_PIN, HIGH);
-        ppsLedState = true;
-
-        ppsLedOn_ms = tNow_ms;
+        ppsLedState  = true;
+        ppsLedOn_ms  = tNow_ms;
     }
     else if (ppsLedState && (tNow_ms - ppsLedOn_ms >= 25))
     {
@@ -1283,11 +1136,9 @@ static void _handleLeds(uint32_t tNow_ms)
     }
 }
 
-
 // =====================================================================================================================
-// _handleLCD — update the LCD with UTC time and oscillator status (1 Hz refresh). */
+// _handleLCD — 20x4 LCD Status Display (1 Hz refresh)
 // =====================================================================================================================
-// ---------------- helpers ----------------
 
 static inline void _lcdPrintRow(uint8_t row, const char* text)
 {
@@ -1362,15 +1213,12 @@ static inline void _fmtLatLonLines(char* line2, size_t sz2, char* line3, size_t 
 
     if (isfinite(lat) && isfinite(lon))
     {
-        // higher precision: 6 decimals
         char latbuf[24];
         char lonbuf[24];
         snprintf(latbuf, sizeof(latbuf), "Lat=%+.6f", lat);
         if (isfinite(alt_m))
         {
-            // Put Alt on lon line to keep two lines
             int alt_i = (int)lround(alt_m);
-            // leave room: " Lon=-122.084000 A:12m"
             snprintf(lonbuf, sizeof(lonbuf), "Lon=%+.6f A:%dm", lon, alt_i);
         }
         else
@@ -1392,7 +1240,6 @@ static inline void _fmtLatLonLines(char* line2, size_t sz2, char* line3, size_t 
 
 static inline void _fmtTopSatsTwoRows(char* row2, size_t sz2, char* row3, size_t sz3)
 {
-    // pick top-6 SNR
     int idx[6];
     int snr[6];
     for (int i = 0; i < 6; ++i)
@@ -1408,7 +1255,6 @@ static inline void _fmtTopSatsTwoRows(char* row2, size_t sz2, char* row3, size_t
         {
             continue;
         }
-        // insert into top-6
         for (int k = 0; k < 6; ++k)
         {
             if (s > snr[k])
@@ -1425,15 +1271,14 @@ static inline void _fmtTopSatsTwoRows(char* row2, size_t sz2, char* row3, size_t
         }
     }
 
-    // Build "SV xx/yy xx/yy xx/yy"
     char tmp2[32];
     char tmp3[32];
     int  used = 0;
 
     {
-        char* p = tmp2;
+        char* p   = tmp2;
         int   rem = (int)sizeof(tmp2);
-        int   n = snprintf(p, rem, "SV");
+        int   n   = snprintf(p, rem, "SV");
         if (n < 0)
         {
             n = 0;
@@ -1442,7 +1287,7 @@ static inline void _fmtTopSatsTwoRows(char* row2, size_t sz2, char* row3, size_t
         {
             n = rem - 1;
         }
-        p   += n;
+        p += n;
         rem -= n;
 
         for (int k = 0; k < 3; ++k)
@@ -1451,7 +1296,7 @@ static inline void _fmtTopSatsTwoRows(char* row2, size_t sz2, char* row3, size_t
             {
                 int prn = g_gsvSats[idx[k]].prn % 100;
                 int ss  = snr[k] % 100;
-                n = snprintf(p, rem, " %02d/%02d", prn, ss);
+                n       = snprintf(p, rem, " %02d/%02d", prn, ss);
                 if (n < 0)
                 {
                     n = 0;
@@ -1460,7 +1305,7 @@ static inline void _fmtTopSatsTwoRows(char* row2, size_t sz2, char* row3, size_t
                 {
                     n = rem - 1;
                 }
-                p   += n;
+                p += n;
                 rem -= n;
                 used++;
             }
@@ -1469,9 +1314,9 @@ static inline void _fmtTopSatsTwoRows(char* row2, size_t sz2, char* row3, size_t
     }
 
     {
-        char* p = tmp3;
+        char* p   = tmp3;
         int   rem = (int)sizeof(tmp3);
-        int   n = snprintf(p, rem, "SV");
+        int   n   = snprintf(p, rem, "SV");
         if (n < 0)
         {
             n = 0;
@@ -1480,7 +1325,7 @@ static inline void _fmtTopSatsTwoRows(char* row2, size_t sz2, char* row3, size_t
         {
             n = rem - 1;
         }
-        p   += n;
+        p += n;
         rem -= n;
 
         for (int k = 3; k < 6; ++k)
@@ -1489,7 +1334,7 @@ static inline void _fmtTopSatsTwoRows(char* row2, size_t sz2, char* row3, size_t
             {
                 int prn = g_gsvSats[idx[k]].prn % 100;
                 int ss  = snr[k] % 100;
-                n = snprintf(p, rem, " %02d/%02d", prn, ss);
+                n       = snprintf(p, rem, " %02d/%02d", prn, ss);
                 if (n < 0)
                 {
                     n = 0;
@@ -1498,7 +1343,7 @@ static inline void _fmtTopSatsTwoRows(char* row2, size_t sz2, char* row3, size_t
                 {
                     n = rem - 1;
                 }
-                p   += n;
+                p += n;
                 rem -= n;
                 used++;
             }
@@ -1527,15 +1372,12 @@ static void _fmtUpTime(const Uptime& u, char* out, size_t outsz)
              (unsigned)u.sec);
 }
 
-// ---------------- main LCD handler ----------------
-
-/* _handleLCD — 20x4 LCD:
-*/
+/* _handleLCD — update the LCD with UTC time and oscillator status. */
 static void _handleLCD(uint32_t tNow_ms)
 {
     static unsigned long lastUpdate_ms = 0;
     static uint32_t      lastCycle_ms  = 0;
-    static uint8_t       cycleIdx      = 0;  // 0: uptime+sys, 1: lat/lon, 2: sats
+    static uint8_t       cycleIdx      = 0;
 
     if ((tNow_ms - lastUpdate_ms) < 1000UL)
     {
@@ -1546,68 +1388,51 @@ static void _handleLCD(uint32_t tNow_ms)
     if ((tNow_ms - lastCycle_ms) >= (k_lcdCyclePeriod_s * 1000UL))
     {
         lastCycle_ms = tNow_ms;
-        cycleIdx = (uint8_t)((cycleIdx + 1) % 3);
+        cycleIdx     = (uint8_t)((cycleIdx + 1) % 3);
     }
 
-    // ---- Row 0: UTC + Tuning Voltage (fits 20) ----
+    // Row 0: UTC + Tuning Voltage
     {
-        // "UTC 12:34:56  L:YH:N"
-        char row0[24];
+        char   row0[24];
         String utc = _utcStrCompact();
-        snprintf(row0, sizeof(row0), "%s  Vt:%0.5f", utc.c_str(), g_gpsDoCtrl.target_v);
+        snprintf(row0, sizeof(row0), "%s Vt:%0.4fV", utc.c_str(), g_gpsDoCtrl.target_v);
         _lcdPrintRow(0, row0);
     }
 
-    // ---- Row 1: Avg frequency (MHz) ----
+    // Row 1: Avg frequency (Hz)
     {
-        double favg_hz  = (isfinite(g_gpsDoCtrl.avg_hz) ? g_gpsDoCtrl.avg_hz : (double)g_gpsDoCtrl.tenMhzCount_hz);
-
-        char row1[32];
-        if (favg_hz >= 10000000)
-        {
-            snprintf(row1, sizeof(row1), "fA: %.4f", favg_hz);
-        }
-        else
-        {
-            snprintf(row1, sizeof(row1), "fA:  %.4f", favg_hz);
-        }
+        double favg_hz = (isfinite(g_gpsDoCtrl.avg_hz) ? g_gpsDoCtrl.avg_hz : (double)g_gpsDoCtrl.tenMhzCount_hz);
+        char   row1[32];
+        snprintf(row1, sizeof(row1), "fA: %.4f Hz", favg_hz);
         _lcdPrintRow(1, row1);
     }
 
-    // ---- Rows 2 & 3: cycle pages ----
+    // Rows 2 & 3: cycle pages
     if (cycleIdx == 0)
     {
-        // Page 0: Uptime (row2) + SU/tAcc/V (row3)
         char r2[32];
         char r3[32];
-
-        char upTimeS[32];
+        char upTimeS[24];
         _fmtUpTime(g_uptime, upTimeS, sizeof(upTimeS));
 
-        snprintf(r2, 32, "%s N:%i", upTimeS, g_gpsDoCtrl.avgNSamp);
+        snprintf(r2, sizeof(r2), "%s N:%u", upTimeS, g_gpsDoCtrl.avgNSamp);
 
+        uint32_t tAcc_ns = 0;
+        if (_gnssMsgCurrent(g_gpsMsgs.tLastTimeUtc_ms))
         {
-            char tbuf[8];
-            uint32_t tAcc_ns = 0;
-            if (_gnssMsgCurrent(g_gpsMsgs.tLastTimeUtc_ms))
-            {
-                tAcc_ns = g_gpsMsgs.timeUtc.tAccNs;
-            }
-            
-            const uint8_t su = _satsUsed();
-
-            const char lock_c = (g_gpsDoCtrl.locked ? 'Y' : 'N');
-
-            // "SU=12 tA=85ns L:Y H:Y"
-            snprintf(r3, sizeof(r3), "SU:%u tA:%i ns L:%c", su, tAcc_ns, lock_c);
+            tAcc_ns = g_gpsMsgs.timeUtc.tAccNs;
         }
+
+        const uint8_t su     = _satsUsed();
+        const char    lock_c = (g_gpsDoCtrl.locked ? 'Y' : 'N');
+
+        snprintf(r3, sizeof(r3), "SU:%u tA:%luns L:%c", (unsigned)su, (unsigned long)tAcc_ns, lock_c);
 
         _lcdPrintRow(2, r2);
         _lcdPrintRow(3, r3);
     }
     else if (cycleIdx == 1)
     {
-        // Page 1: Lat (row2) / Lon(+Alt) (row3)
         char r2[32];
         char r3[32];
         _fmtLatLonLines(r2, sizeof(r2), r3, sizeof(r3));
@@ -1616,7 +1441,6 @@ static void _handleLCD(uint32_t tNow_ms)
     }
     else
     {
-        // Page 2: Top satellites across both rows (up to 6 PRN/SNR)
         char r2[32];
         char r3[32];
         _fmtTopSatsTwoRows(r2, sizeof(r2), r3, sizeof(r3));
@@ -1626,7 +1450,7 @@ static void _handleLCD(uint32_t tNow_ms)
 }
 
 // =====================================================================================================================
-/* _handleUptime - Calculate a rollover safe uptime  */
+/* _handleUptime - Rollover safe uptime */
 // =====================================================================================================================
 static void _handleUptime(uint32_t tNow_ms)
 {
@@ -1640,32 +1464,31 @@ static void _handleUptime(uint32_t tNow_ms)
         last_ms = tNow_ms;
     }
 
-    uint32_t delta_ms = tNow_ms - last_ms;   // wrap-safe unsigned diff
-    last_ms = tNow_ms;
+    uint32_t delta_ms = tNow_ms - last_ms;
+    last_ms           = tNow_ms;
     acc_ms += (uint64_t)delta_ms;
 
     uint64_t t = acc_ms;
 
-    g_uptime.day  = (uint32_t)(t / 86400000ULL);
-    t             = t % 86400000ULL;
+    g_uptime.day = (uint32_t)(t / 86400000ULL);
+    t            = t % 86400000ULL;
 
-    g_uptime.hr   = (uint8_t)(t / 3600000ULL);
-    t             = t % 3600000ULL;
+    g_uptime.hr = (uint8_t)(t / 3600000ULL);
+    t           = t % 3600000ULL;
 
-    g_uptime.min  = (uint8_t)(t / 60000ULL);
-    t             = t % 60000ULL;
+    g_uptime.min = (uint8_t)(t / 60000ULL);
+    t            = t % 60000ULL;
 
-    g_uptime.sec  = (uint8_t)(t / 1000ULL);
-    t             = t % 1000ULL;
+    g_uptime.sec = (uint8_t)(t / 1000ULL);
+    t            = t % 1000ULL;
 
-    g_uptime.tenms= (uint8_t)(t / 10ULL);   // 0..99
+    g_uptime.tenms = (uint8_t)(t / 10ULL);
 }
 
 // =====================================================================================================================
 // Main loop
 // =====================================================================================================================
 
-/* loop — Service PPS, LEDs, GNSS, console, control, and lock logic. */
 void loop()
 {
     uint32_t tLoop_ms = millis();
@@ -1676,7 +1499,7 @@ void loop()
     _handleGnss(tLoop_ms);
     _handleOscTuning(tLoop_ms);
     _handleLockLogic(tLoop_ms);
-    
+
     _handleLeds(tLoop_ms);
     _handleConsole(tLoop_ms);
     _handleLCD(tLoop_ms);

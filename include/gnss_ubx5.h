@@ -185,6 +185,7 @@ bool gnssDecodeCfgTmode(const UbxFrame& fr, UbxCfgTmode& out);
 
 
 // ---------- Public: message control ----------
+void gnssSetBaudRate(uint8_t portId, uint32_t baudRate);                              // UBX-CFG-PRT
 void gnssSendPubx40(const char* msg, bool enable);                                    // $PUBX,40,<msg>,...
 void gnssSendUbxCfgMsg(uint8_t cls, uint8_t id, uint8_t targetPortId, uint8_t rate);  // UBX-CFG-MSG
 void gnssEnableSurveyIn(uint32_t minDurSec, uint32_t varLimit_mm2);

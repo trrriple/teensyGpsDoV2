@@ -7,7 +7,7 @@
 
 // ---------------- Debug ----------------
 static Stream* _dbg = nullptr;
-static void    _dbgPrintln(const char* s)
+static inline void _dbgPrintln(const char* s)
 {
     if (_dbg != nullptr)
     {
@@ -1023,6 +1023,31 @@ static void _sendCfgTmode(uint32_t timeMode,
     wrU4(24, svinVarLimit_mm2);  // survey-in variance limit (mm^2)
 
     _sendUbxFrame(0x06, 0x1D, p, sizeof(p));
+}
+
+void gnssSetBaudRate(uint8_t portId, uint32_t baudRate)
+{
+    // UBX-CFG-PRT (Class 0x06, ID 0x00, Length 20)
+    uint8_t p[20] = {0};
+    p[0] = portId;  // 1 = UART1
+    // mode: 8N1 (0x000008D0)
+    p[4] = 0xD0;
+    p[5] = 0x08;
+    p[6] = 0x00;
+    p[7] = 0x00;
+    // baudRate (4 bytes little-endian)
+    p[8]  = (uint8_t)(baudRate & 0xFF);
+    p[9]  = (uint8_t)((baudRate >> 8) & 0xFF);
+    p[10] = (uint8_t)((baudRate >> 16) & 0xFF);
+    p[11] = (uint8_t)((baudRate >> 24) & 0xFF);
+    // inProtoMask: 0x0007 (UBX + NMEA + RTCM)
+    p[12] = 0x07;
+    p[13] = 0x00;
+    // outProtoMask: 0x0003 (UBX + NMEA)
+    p[14] = 0x03;
+    p[15] = 0x00;
+
+    _sendUbxFrame(0x06, 0x00, p, sizeof(p));
 }
 
 void gnssSendUbxCfgMsg(uint8_t cls, uint8_t id, uint8_t targetPortId, uint8_t rate)
