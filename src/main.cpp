@@ -143,6 +143,18 @@ struct TenMhzAvgState
 };
 
 // =====================================================================================================================
+// GPSDO operational state
+// =====================================================================================================================
+enum class GpsdoState : uint8_t
+{
+    WARMUP    = 0,  // Initializing / waiting for first valid PPS & GPS fix
+    ACQUIRING = 1,  // Disciplining, coarse/fine pull-in towards 10 MHz
+    LOCKED    = 2,  // Disciplined & locked within target ppb
+    HOLDOVER  = 3,  // GPS PPS or fix lost after being locked; DAC frozen at vIntegral
+    FAULT     = 4   // 10 MHz oscillator clock missing on Pin 19
+};
+
+// =====================================================================================================================
 // GPSDO controller state (config, internals, metrics)
 // =====================================================================================================================
 struct GpsdoCtrl
@@ -173,6 +185,16 @@ struct GpsdoCtrl
     double KpLock     = 0.01;      // Gentler proportional damping in lock
     double KiLock     = 0.0001;    // Ultra-fine integral frequency term in lock
     double KphaseLock = 0.000002;  // Ultra-gentle absolute phase alignment in lock (<= 0.1 ppb)
+
+    // Operational State & Holdover tracking
+    GpsdoState state             = GpsdoState::WARMUP;
+    bool       holdover          = false;
+    uint32_t   holdoverSec       = 0;
+    uint32_t   tHoldoverStart_ms = 0;
+    bool       everLocked        = false;
+    bool       ppsAlive          = false;
+    bool       gnssFixValid      = false;
+    uint32_t   tLastGoodFix_ms   = 0;
 
     // Internals
     uint32_t tenMhzCount_hz   = 0;    // 1 s gate → Hz
@@ -675,6 +697,15 @@ static void _handleGnss(uint32_t tNow_ms)
             }
         }
     }
+
+    // Evaluate GNSS fix validity
+    bool ggaValid = _gnssMsgCurrent(g_gpsMsgs.tLastGga_ms) && (g_gpsMsgs.gga.fixQ > 0);
+    bool rmcValid = _gnssMsgCurrent(g_gpsMsgs.tLastRmc_ms) && g_gpsMsgs.rmc.valid;
+    g_gpsDoCtrl.gnssFixValid = ggaValid || rmcValid;
+    if (g_gpsDoCtrl.gnssFixValid)
+    {
+        g_gpsDoCtrl.tLastGoodFix_ms = tNow_ms;
+    }
 }
 
 // =====================================================================================================================
@@ -781,6 +812,24 @@ static void _handleConsole(uint32_t tNow_ms)
     char     goodPps_c  = g_gpsDoCtrl.goodPps ? 'Y' : 'N';
     char     avgReady_c = _tenMhzAvgReady() ? 'Y' : 'N';
 
+    const char* stateStr = "WARMUP";
+    if (g_gpsDoCtrl.state == GpsdoState::LOCKED)
+    {
+        stateStr = "LOCKED";
+    }
+    else if (g_gpsDoCtrl.state == GpsdoState::HOLDOVER)
+    {
+        stateStr = "HOLDOVER";
+    }
+    else if (g_gpsDoCtrl.state == GpsdoState::ACQUIRING)
+    {
+        stateStr = "ACQUIRING";
+    }
+    else if (g_gpsDoCtrl.state == GpsdoState::FAULT)
+    {
+        stateStr = "FAULT";
+    }
+
     // [TIME]
     _printUptimeStamp();
     CONSOLE.print("[TIME] UTC:");
@@ -792,12 +841,13 @@ static void _handleConsole(uint32_t tNow_ms)
     {
         CONSOLE.print("--:--:--");
     }
-    CONSOLE.printf(" | qErr=%.1f ns | tAcc=%lu ns | goodPps=%c | avgReady=%c | nAvg=%u\r\n",
+    CONSOLE.printf(" | qErr=%.1f ns | tAcc=%lu ns | goodPps=%c | avgReady=%c | ppsAlive=%c | state=%s\r\n",
                    haveTimTp ? qErr_ns : 0.0f,
                    (unsigned long)tAcc_ns,
                    goodPps_c,
                    avgReady_c,
-                   g_gpsDoCtrl.avgNSamp);
+                   g_gpsDoCtrl.ppsAlive ? 'Y' : 'N',
+                   stateStr);
 
     // [GPS]
     _printUptimeStamp();
@@ -830,15 +880,26 @@ static void _handleConsole(uint32_t tNow_ms)
 
     // [OSC] Line 2: Control Voltages and Lock
     _printUptimeStamp();
-    CONSOLE.printf(
-        "[OSC] V_target=%.6f V | V_int=%.6f V | V_prop=%.6f V | lock=%d | fA=%.4f Hz | err=%.3f ppb | rms=%.3f Hz\r\n",
-        g_gpsDoCtrl.target_v,
-        g_gpsDoCtrl.vIntegral,
-        g_gpsDoCtrl.vProp,
-        g_gpsDoCtrl.locked ? 1 : 0,
-        g_gpsDoCtrl.avg_hz,
-        g_gpsDoCtrl.avgErr_ppb,
-        g_gpsDoCtrl.rms_hz);
+    if (g_gpsDoCtrl.state == GpsdoState::HOLDOVER)
+    {
+        CONSOLE.printf(
+            "[OSC] V_target=%.6f V | V_int=%.6f V (FROZEN) | holdover=%lu s | state=HOLDOVER\r\n",
+            g_gpsDoCtrl.target_v,
+            g_gpsDoCtrl.vIntegral,
+            (unsigned long)g_gpsDoCtrl.holdoverSec);
+    }
+    else
+    {
+        CONSOLE.printf(
+            "[OSC] V_target=%.6f V | V_int=%.6f V | V_prop=%.6f V | lock=%d | fA=%.4f Hz | err=%.3f ppb | rms=%.3f Hz\r\n",
+            g_gpsDoCtrl.target_v,
+            g_gpsDoCtrl.vIntegral,
+            g_gpsDoCtrl.vProp,
+            g_gpsDoCtrl.locked ? 1 : 0,
+            g_gpsDoCtrl.avg_hz,
+            g_gpsDoCtrl.avgErr_ppb,
+            g_gpsDoCtrl.rms_hz);
+    }
 }
 
 // =====================================================================================================================
@@ -873,6 +934,8 @@ static void _handlePps(uint32_t tNow_ms)
             g_oscRxErr                 = false;
         }
     }
+
+    g_gpsDoCtrl.ppsAlive = ((tNow_ms - g_tLastPps_ms) <= 1500) && (g_tLastPps_ms != 0);
 }
 
 // =====================================================================================================================
@@ -880,6 +943,15 @@ static void _handlePps(uint32_t tNow_ms)
 // =====================================================================================================================
 static void _handleOscTuning(uint32_t tNow_ms)
 {
+    // If in holdover mode, maintain frozen DAC voltage without any disturbance
+    if (g_gpsDoCtrl.state == GpsdoState::HOLDOVER)
+    {
+        g_gpsDoCtrl.target_v = g_gpsDoCtrl.vIntegral;
+        g_gpsDoCtrl.vProp    = 0.0;
+        _setOscTuneVoltage(g_gpsDoCtrl.target_v);
+        return;
+    }
+
     // Execute tuning only when PPS is captured and we have the matching TIM-TP (or a 250ms timeout)
     if (!g_ppsCaptured || g_oscRxErr)
     {
@@ -924,8 +996,8 @@ static void _handleOscTuning(uint32_t tNow_ms)
     g_gpsDoCtrl.dCyclesRaw = (double)dCycles_raw;
     g_gpsDoCtrl.dCycles    = (double)dCycles_raw - fracCycles;
 
-    // Good PPS gate
-    g_gpsDoCtrl.goodPps = haveQerr && (fabs((double)qErr_ns) <= g_gpsDoCtrl.qErrMax_ns);
+    // Good PPS gate (requires valid qErr AND valid active GNSS fix)
+    g_gpsDoCtrl.goodPps = haveQerr && g_gpsDoCtrl.gnssFixValid && (fabs((double)qErr_ns) <= g_gpsDoCtrl.qErrMax_ns);
 
     if (g_gpsDoCtrl.goodPps)
     {
@@ -959,6 +1031,14 @@ static void _handleOscTuning(uint32_t tNow_ms)
 
     g_gpsDoCtrl.haveAvg = _tenMhzAvgReady();
 
+    // If PPS or fix is not qualified, do not corrupt the integral state
+    if (!g_gpsDoCtrl.goodPps)
+    {
+        g_gpsDoCtrl.vProp = 0.0;
+        _setOscTuneVoltage(g_gpsDoCtrl.target_v);
+        return;
+    }
+
     // ---- Multi-Stage Adaptive Gains & Slew Limits ----
     double Kp_use;
     double Ki_use;
@@ -989,7 +1069,7 @@ static void _handleOscTuning(uint32_t tNow_ms)
     }
 
     // 1) Integral Term (Volts): accumulates physical crystal bias with zero steady-state error
-    if (g_gpsDoCtrl.goodPps && g_gpsDoCtrl.ocxoHzPerV > 0.0)
+    if (g_gpsDoCtrl.ocxoHzPerV > 0.0)
     {
         double dV_int = -(Ki_use * g_gpsDoCtrl.dCycles) / g_gpsDoCtrl.ocxoHzPerV;
 
@@ -1052,20 +1132,79 @@ static void _handleOscTuning(uint32_t tNow_ms)
 }
 
 // =====================================================================================================================
-/* _handleLockLogic — Lock qualification state machine */
+/* _handleLockLogic — Lock qualification & Holdover state machine */
 // =====================================================================================================================
 static void _handleLockLogic(uint32_t tNow_ms)
 {
-    if (!g_tuningCycle)
+    // Fault condition: 10 MHz reference missing on Pin 19
+    if (g_oscRxErr)
     {
+        g_gpsDoCtrl.state      = GpsdoState::FAULT;
+        g_gpsDoCtrl.locked     = false;
+        g_gpsDoCtrl.holdover   = false;
+        g_gpsDoCtrl.goodCycles = 0;
         return;
     }
 
-    // Guards
-    if (((tNow_ms - g_tLastPps_ms) > 1500) || g_oscRxErr)
+    const bool ppsAlive   = g_gpsDoCtrl.ppsAlive;
+    const bool fixValid   = g_gpsDoCtrl.gnssFixValid;
+    const bool signalLost = !ppsAlive || !fixValid;
+
+    // Handle Loss of PPS or GPS Fix
+    if (signalLost)
     {
-        g_gpsDoCtrl.locked     = false;
-        g_gpsDoCtrl.goodCycles = 0;
+        if (g_gpsDoCtrl.everLocked)
+        {
+            if (g_gpsDoCtrl.state != GpsdoState::HOLDOVER)
+            {
+                // Transition into Holdover mode
+                g_gpsDoCtrl.state             = GpsdoState::HOLDOVER;
+                g_gpsDoCtrl.holdover          = true;
+                g_gpsDoCtrl.locked            = false;
+                g_gpsDoCtrl.tHoldoverStart_ms = tNow_ms;
+                g_gpsDoCtrl.holdoverSec       = 0;
+                g_gpsDoCtrl.goodCycles        = 0;
+
+                // Freeze DAC at pure steady-state integrator voltage
+                g_gpsDoCtrl.target_v = g_gpsDoCtrl.vIntegral;
+                g_gpsDoCtrl.vProp    = 0.0;
+                _setOscTuneVoltage(g_gpsDoCtrl.target_v);
+
+                CONSOLE.printf("[HOLDOVER] Lost %s -> Entering Holdover. DAC frozen at %.6f V\r\n",
+                               !ppsAlive ? "1PPS Signal" : "GNSS Fix",
+                               g_gpsDoCtrl.vIntegral);
+            }
+            else
+            {
+                // Already in Holdover: update elapsed holdover time
+                g_gpsDoCtrl.holdoverSec = (tNow_ms - g_gpsDoCtrl.tHoldoverStart_ms) / 1000UL;
+            }
+        }
+        else
+        {
+            // Lost signal before ever locking
+            g_gpsDoCtrl.state      = GpsdoState::WARMUP;
+            g_gpsDoCtrl.locked     = false;
+            g_gpsDoCtrl.holdover   = false;
+            g_gpsDoCtrl.goodCycles = 0;
+        }
+        return;
+    }
+
+    // If recovering from holdover: clear holdover and prepare to re-acquire
+    if (g_gpsDoCtrl.holdover)
+    {
+        g_gpsDoCtrl.holdover     = false;
+        g_gpsDoCtrl.state        = GpsdoState::ACQUIRING;
+        g_gpsDoCtrl.goodCycles   = 0;
+        g_gpsDoCtrl.phaseAccum_s = 0.0;
+        g_gpsDoCtrl.havePrevQErr = false;
+        CONSOLE.println("[RECOVERY] Signal Restored -> Resuming disciplining...");
+    }
+
+    // Evaluate Lock criteria only on fresh 1-second capture cycles
+    if (!g_tuningCycle)
+    {
         return;
     }
 
@@ -1092,41 +1231,66 @@ static void _handleLockLogic(uint32_t tNow_ms)
     }
 
     bool wasLocked     = g_gpsDoCtrl.locked;
-    g_gpsDoCtrl.locked = (avgReady && (g_gpsDoCtrl.goodCycles >= (k_requiredGoodCyclesLock - 1)));
+    bool nowLocked     = (avgReady && (g_gpsDoCtrl.goodCycles >= (k_requiredGoodCyclesLock - 1)));
+    g_gpsDoCtrl.locked = nowLocked;
 
-    // Reset phase accumulator to 0 upon entering lock so historical startup drift is not steered
-    if (!wasLocked && g_gpsDoCtrl.locked)
+    if (nowLocked)
     {
-        g_gpsDoCtrl.phaseAccum_s = 0.0;
-        CONSOLE.println("[LOCK] Entered Lock -> Phase accumulator zeroed for tracking.");
+        g_gpsDoCtrl.state       = GpsdoState::LOCKED;
+        g_gpsDoCtrl.everLocked  = true;
+        g_gpsDoCtrl.holdoverSec = 0;
+
+        // Reset phase accumulator to 0 upon entering lock so historical startup drift is not steered
+        if (!wasLocked)
+        {
+            g_gpsDoCtrl.phaseAccum_s = 0.0;
+            CONSOLE.println("[LOCK] Entered Lock -> Phase accumulator zeroed for tracking.");
+        }
+    }
+    else
+    {
+        g_gpsDoCtrl.state = GpsdoState::ACQUIRING;
     }
 }
 
 // =====================================================================================================================
-/* _handleLeds — Blink PPS LED and show lock status on LOCK LED. */
+/* _handleLeds — Blink PPS LED and show lock/holdover status on LOCK LED. */
 // =====================================================================================================================
 static void _handleLeds(uint32_t tNow_ms)
 {
-    static bool     lockedLedState = false;
-    static bool     ppsLedState    = false;
-    static uint32_t ppsLedOn_ms    = 0;
+    static uint32_t lastBlink_ms = 0;
+    static bool     blinkState   = false;
 
-    if (g_gpsDoCtrl.locked && !lockedLedState)
+    if (tNow_ms - lastBlink_ms >= 500)
     {
-        analogWrite(LOCKED_LED_PIN, 5);
-        lockedLedState = true;
+        lastBlink_ms = tNow_ms;
+        blinkState   = !blinkState;
     }
-    else if (!g_gpsDoCtrl.locked && lockedLedState)
+
+    // LOCK LED behavior
+    if (g_gpsDoCtrl.state == GpsdoState::LOCKED)
     {
-        analogWrite(LOCKED_LED_PIN, 0);
-        lockedLedState = false;
+        analogWrite(LOCKED_LED_PIN, 5);  // Solid glow when locked
     }
+    else if (g_gpsDoCtrl.state == GpsdoState::HOLDOVER)
+    {
+        // 1 Hz blink in Holdover mode
+        analogWrite(LOCKED_LED_PIN, blinkState ? 5 : 0);
+    }
+    else
+    {
+        analogWrite(LOCKED_LED_PIN, 0);  // Off when unlocked / warmup / fault
+    }
+
+    // PPS LED: pulse 25ms on actual PPS events
+    static bool     ppsLedState = false;
+    static uint32_t ppsLedOn_ms = 0;
 
     if (g_tuningCycle && !ppsLedState)
     {
         digitalWrite(PPS_LED_PIN, HIGH);
-        ppsLedState  = true;
-        ppsLedOn_ms  = tNow_ms;
+        ppsLedState = true;
+        ppsLedOn_ms = tNow_ms;
     }
     else if (ppsLedState && (tNow_ms - ppsLedOn_ms >= 25))
     {
@@ -1391,19 +1555,50 @@ static void _handleLCD(uint32_t tNow_ms)
         cycleIdx     = (uint8_t)((cycleIdx + 1) % 3);
     }
 
-    // Row 0: UTC + Tuning Voltage
+    // Row 0: UTC / State + Tuning Voltage
     {
-        char   row0[24];
-        String utc = _utcStrCompact();
-        snprintf(row0, sizeof(row0), "%s Vt:%0.4fV", utc.c_str(), g_gpsDoCtrl.target_v);
+        char row0[24];
+        if (g_gpsDoCtrl.state == GpsdoState::HOLDOVER)
+        {
+            uint32_t hs = g_gpsDoCtrl.holdoverSec;
+            uint8_t  hh = (uint8_t)(hs / 3600UL);
+            uint8_t  mm = (uint8_t)((hs % 3600UL) / 60UL);
+            uint8_t  ss = (uint8_t)(hs % 60UL);
+            snprintf(row0, sizeof(row0), "H:%02u:%02u:%02u Vt:%0.4f", (unsigned)hh, (unsigned)mm, (unsigned)ss, g_gpsDoCtrl.target_v);
+        }
+        else if (!g_gpsDoCtrl.ppsAlive)
+        {
+            snprintf(row0, sizeof(row0), "NO PPS   Vt:%0.4fV", g_gpsDoCtrl.target_v);
+        }
+        else if (!g_gpsDoCtrl.gnssFixValid)
+        {
+            snprintf(row0, sizeof(row0), "NO FIX   Vt:%0.4fV", g_gpsDoCtrl.target_v);
+        }
+        else
+        {
+            String utc = _utcStrCompact();
+            snprintf(row0, sizeof(row0), "%s Vt:%0.4fV", utc.c_str(), g_gpsDoCtrl.target_v);
+        }
         _lcdPrintRow(0, row0);
     }
 
-    // Row 1: Avg frequency (Hz)
+    // Row 1: Avg frequency (Hz) or Status
     {
-        double favg_hz = (isfinite(g_gpsDoCtrl.avg_hz) ? g_gpsDoCtrl.avg_hz : (double)g_gpsDoCtrl.tenMhzCount_hz);
-        char   row1[32];
-        snprintf(row1, sizeof(row1), "fA: %.4f Hz", favg_hz);
+        char row1[32];
+        if (g_gpsDoCtrl.state == GpsdoState::HOLDOVER)
+        {
+            double favg = isfinite(g_gpsDoCtrl.avg_hz) ? g_gpsDoCtrl.avg_hz : 10000000.0;
+            snprintf(row1, sizeof(row1), "fA:[HOLD] %.4fHz", favg);
+        }
+        else if (!g_gpsDoCtrl.ppsAlive)
+        {
+            snprintf(row1, sizeof(row1), "fA: NO 1PPS SIGNAL");
+        }
+        else
+        {
+            double favg_hz = (isfinite(g_gpsDoCtrl.avg_hz) ? g_gpsDoCtrl.avg_hz : (double)g_gpsDoCtrl.tenMhzCount_hz);
+            snprintf(row1, sizeof(row1), "fA: %.4f Hz", favg_hz);
+        }
         _lcdPrintRow(1, row1);
     }
 
@@ -1423,8 +1618,20 @@ static void _handleLCD(uint32_t tNow_ms)
             tAcc_ns = g_gpsMsgs.timeUtc.tAccNs;
         }
 
-        const uint8_t su     = _satsUsed();
-        const char    lock_c = (g_gpsDoCtrl.locked ? 'Y' : 'N');
+        const uint8_t su = _satsUsed();
+        char lock_c = 'N';
+        if (g_gpsDoCtrl.state == GpsdoState::LOCKED)
+        {
+            lock_c = 'Y';
+        }
+        else if (g_gpsDoCtrl.state == GpsdoState::HOLDOVER)
+        {
+            lock_c = 'H';
+        }
+        else if (g_gpsDoCtrl.state == GpsdoState::FAULT)
+        {
+            lock_c = 'F';
+        }
 
         snprintf(r3, sizeof(r3), "SU:%u tA:%luns L:%c", (unsigned)su, (unsigned long)tAcc_ns, lock_c);
 
